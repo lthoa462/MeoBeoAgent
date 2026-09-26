@@ -1,0 +1,25 @@
+{
+  "name": "meobeo-agent",
+  "version": "0.1.0",
+  "description": "MeoBeo – AI agent hỗ trợ giáo viên soạn bài môn Toán lớp 10 (OpenAI & Gemini)",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "mathjs": "^15.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.2"
+  }
+}
