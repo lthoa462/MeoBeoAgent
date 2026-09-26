@@ -5,15 +5,20 @@
 
 import { validateArgs, type Tool, type ToolContext } from './tool.ts'
 import type {
+  AssistantPart,
   Message,
   ModelAdapter,
-  TextPart,
+  ModelRequest,
+  ReasoningPart,
   ToolCallPart,
   ToolResultPart,
   Usage,
 } from './types.ts'
 
 export type AgentEvent =
+  | { type: 'step-start'; step: number }
+  | { type: 'reasoning-delta'; text: string }
+  | { type: 'reasoning-end' }
   | { type: 'text-delta'; text: string }
   | { type: 'tool-call'; call: ToolCallPart }
   | { type: 'tool-result'; result: ToolResultPart }
@@ -30,25 +35,32 @@ export type RunAgentOptions = {
   /** Số lần gọi model tối đa trong một lượt (giới hạn an toàn). Mặc định 8. */
   maxSteps?: number
   confirm?: ToolContext['confirm']
+  /** Bật suy nghĩ và hiện tiến trình tư duy (xem ModelRequest.reasoning). */
+  reasoning?: ModelRequest['reasoning']
   signal?: AbortSignal
 }
 
 export async function* runAgent(options: RunAgentOptions): AsyncGenerator<AgentEvent> {
-  const { adapter, model, system, history, tools, signal } = options
+  const { adapter, model, system, history, tools, reasoning, signal } = options
   const maxSteps = options.maxSteps ?? 8
   const confirm = options.confirm ?? (async () => false)
   const toolsByName = new Map(tools.map(tool => [tool.name, tool]))
   const specs = tools.map(({ name, description, parameters }) => ({ name, description, parameters }))
-  const total: Usage = { inputTokens: 0, outputTokens: 0 }
+  const total: Usage = { inputTokens: 0, outputTokens: 0, reasoningTokens: 0 }
 
   for (let step = 1; step <= maxSteps; step++) {
     // Bước cuối: cấm gọi tool để model buộc phải tổng kết bằng chữ,
     // thay vì dừng giữa chừng không có câu trả lời.
     const isLastStep = step === maxSteps
 
-    // 1) Gọi model và gom stream thành một assistant message.
+    yield { type: 'step-start', step }
+
+    // 1) Gọi model và gom stream thành một assistant message:
+    //    [suy nghĩ...] → [câu trả lời / lời dẫn] → [các tool call]
     let text = ''
     const calls: ToolCallPart[] = []
+    const thoughts: ReasoningPart[] = []
+    let thinking = '' // khối suy nghĩ đang stream dở
     let usage: Usage | undefined
     for await (const event of adapter.stream({
       model,
@@ -56,22 +68,45 @@ export async function* runAgent(options: RunAgentOptions): AsyncGenerator<AgentE
       messages: history,
       tools: specs,
       toolChoice: isLastStep ? 'none' : 'auto',
+      reasoning,
       signal,
     })) {
-      if (event.type === 'text-delta') {
-        text += event.text
-        yield event
-      } else if (event.type === 'tool-call') {
-        calls.push(event.call)
-        yield event
-      } else {
-        usage = event.usage
+      switch (event.type) {
+        case 'reasoning-delta':
+          thinking += event.text
+          yield event
+          break
+        case 'reasoning-end':
+          // Giữ lại cả khối suy nghĩ rỗng nếu provider gửi dữ liệu mã hoá cần trả về.
+          if (thinking || event.providerMeta) {
+            thoughts.push({ type: 'reasoning', text: thinking, ...(event.providerMeta ? { providerMeta: event.providerMeta } : {}) })
+          }
+          if (thinking) yield { type: 'reasoning-end' }
+          thinking = ''
+          break
+        case 'text-delta':
+          text += event.text
+          yield event
+          break
+        case 'tool-call':
+          calls.push(event.call)
+          yield event
+          break
+        case 'finish':
+          usage = event.usage
+          break
       }
+    }
+    // Provider không báo kết thúc khối suy nghĩ (vd. Gemini) → chốt ở cuối stream.
+    if (thinking) {
+      thoughts.push({ type: 'reasoning', text: thinking })
+      yield { type: 'reasoning-end' }
     }
     total.inputTokens! += usage?.inputTokens ?? 0
     total.outputTokens! += usage?.outputTokens ?? 0
+    total.reasoningTokens! += usage?.reasoningTokens ?? 0
 
-    const parts: (TextPart | ToolCallPart)[] = []
+    const parts: AssistantPart[] = [...thoughts]
     if (text) parts.push({ type: 'text', text })
     parts.push(...calls)
     history.push({ role: 'assistant', parts })

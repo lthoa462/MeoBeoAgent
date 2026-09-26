@@ -15,6 +15,18 @@ export type ToolCallPart = {
   providerMeta?: Record<string, unknown>
 }
 
+/**
+ * Phần "suy nghĩ" của model (reasoning / thinking). Thường là BẢN TÓM TẮT do
+ * provider tạo ra, không phải toàn bộ chuỗi suy luận nội bộ.
+ * providerMeta giữ dữ liệu mã hoá mà provider cần nhận lại ở lượt sau
+ * (vd. encrypted_content của OpenAI) để model "nhớ" mạch suy nghĩ khi gọi tool.
+ */
+export type ReasoningPart = {
+  type: 'reasoning'
+  text: string
+  providerMeta?: Record<string, unknown>
+}
+
 export type ToolResultPart = {
   type: 'tool-result'
   callId: string
@@ -23,9 +35,11 @@ export type ToolResultPart = {
   isError?: boolean
 }
 
+export type AssistantPart = ReasoningPart | TextPart | ToolCallPart
+
 export type Message =
   | { role: 'user'; parts: TextPart[] }
-  | { role: 'assistant'; parts: (TextPart | ToolCallPart)[] }
+  | { role: 'assistant'; parts: AssistantPart[] }
   | { role: 'tool'; parts: ToolResultPart[] }
 
 /** JSON Schema tối giản cho tham số tool. */
@@ -37,12 +51,20 @@ export type ToolSpec = {
   parameters: JsonSchema
 }
 
-export type Usage = { inputTokens?: number; outputTokens?: number }
+export type Usage = {
+  inputTokens?: number
+  outputTokens?: number
+  /** Số token dành cho suy nghĩ (đã nằm trong outputTokens). */
+  reasoningTokens?: number
+}
 
 export type FinishReason = 'stop' | 'tool-calls' | 'length' | 'other'
 
 /** Sự kiện stream mà mọi adapter đều phải phát ra theo cùng một dạng. */
 export type StreamEvent =
+  | { type: 'reasoning-delta'; text: string }
+  /** Kết thúc một khối suy nghĩ; kèm dữ liệu cần gửi lại cho provider (nếu có). */
+  | { type: 'reasoning-end'; providerMeta?: Record<string, unknown> }
   | { type: 'text-delta'; text: string }
   | { type: 'tool-call'; call: ToolCallPart }
   | { type: 'finish'; reason: FinishReason; usage?: Usage }
@@ -54,6 +76,12 @@ export type ModelRequest = {
   tools?: ToolSpec[]
   /** 'none' = cấm gọi tool, buộc model trả lời bằng chữ. */
   toolChoice?: 'auto' | 'none'
+  /**
+   * Bật suy nghĩ và yêu cầu provider trả về bản tóm tắt tiến trình tư duy.
+   * effort: mức độ suy nghĩ ("low" | "medium" | "high"...), bỏ trống = mặc định của model.
+   * Không truyền = không yêu cầu (dùng cho model không hỗ trợ reasoning).
+   */
+  reasoning?: { effort?: string }
   signal?: AbortSignal
 }
 

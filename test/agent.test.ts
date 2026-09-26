@@ -43,7 +43,7 @@ describe('runAgent', () => {
 
     expect(events.find(e => e.type === 'tool-result')).toMatchObject({ result: { callId: 'c1', result: 5 } })
     expect(events.at(-1)).toEqual({
-      type: 'done', text: 'Kết quả là 5.', reason: 'completed', usage: { inputTokens: 30, outputTokens: 9 },
+      type: 'done', text: 'Kết quả là 5.', reason: 'completed', usage: { inputTokens: 30, outputTokens: 9, reasoningTokens: 0 },
     })
     expect(history.map(m => m.role)).toEqual(['user', 'assistant', 'tool', 'assistant'])
     // Lần gọi thứ hai phải thấy kết quả tool trong history.

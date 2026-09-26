@@ -1,6 +1,10 @@
 // Adapter cho OpenAI Chat Completions API (POST /chat/completions, stream SSE).
 // Chat Completions cũng được nhiều gateway khác hỗ trợ (OpenRouter, Groq,
 // Ollama, LM Studio...), chỉ cần đổi baseUrl.
+//
+// Lưu ý về suy nghĩ: OpenAI KHÔNG trả nội dung suy nghĩ qua Chat Completions
+// (muốn xem thì dùng Responses API – openai-responses.ts). Một số gateway khác
+// (DeepSeek, OpenRouter, Ollama...) có trả trong delta.reasoning_content / delta.reasoning.
 
 import { readSse } from '../core/sse.ts'
 import {
@@ -11,6 +15,7 @@ import {
   type ModelAdapter,
   type ModelRequest,
   type StreamEvent,
+  type Usage,
 } from '../core/types.ts'
 
 export type OpenAiOptions = {
@@ -61,6 +66,7 @@ export function buildBody(request: ModelRequest) {
     }))
     body.tool_choice = request.toolChoice ?? 'auto'
   }
+  if (request.reasoning?.effort) body.reasoning_effort = request.reasoning.effort
   return body
 }
 
@@ -69,6 +75,7 @@ function toWireMessages(message: Message): unknown[] {
     case 'user':
       return [{ role: 'user', content: message.parts.map(part => part.text).join('') }]
     case 'assistant': {
+      // Bỏ qua phần suy nghĩ: Chat Completions không nhận lại reasoning.
       const text = message.parts.flatMap(part => (part.type === 'text' ? [part.text] : [])).join('')
       const toolCalls = message.parts.flatMap(part =>
         part.type === 'tool-call'
@@ -102,26 +109,50 @@ function toWireMessages(message: Message): unknown[] {
 
 type ChunkToolCall = { index: number; id?: string; function?: { name?: string; arguments?: string } }
 type Chunk = {
-  choices?: { delta?: { content?: string | null; tool_calls?: ChunkToolCall[] }; finish_reason?: string | null }[]
-  usage?: { prompt_tokens?: number; completion_tokens?: number } | null
+  choices?: {
+    delta?: { content?: string | null; reasoning_content?: string | null; reasoning?: string | null; tool_calls?: ChunkToolCall[] }
+    finish_reason?: string | null
+  }[]
+  usage?: {
+    prompt_tokens?: number
+    completion_tokens?: number
+    completion_tokens_details?: { reasoning_tokens?: number }
+  } | null
 }
 
 export async function* translate(data: AsyncIterable<string>): AsyncGenerator<StreamEvent> {
   // Tham số của tool call đến từng mẩu JSON, phải nối lại theo `index`.
   const pending = new Map<number, { id: string; name: string; args: string }>()
   let finish: FinishReason = 'other'
-  let usage: { inputTokens?: number; outputTokens?: number } | undefined
+  let usage: Usage | undefined
+  let thinking = false
 
   for await (const raw of data) {
     if (raw === '[DONE]') break
     const chunk = JSON.parse(raw) as Chunk
     if (chunk.usage) {
-      usage = { inputTokens: chunk.usage.prompt_tokens, outputTokens: chunk.usage.completion_tokens }
+      const reasoningTokens = chunk.usage.completion_tokens_details?.reasoning_tokens
+      usage = {
+        inputTokens: chunk.usage.prompt_tokens,
+        outputTokens: chunk.usage.completion_tokens,
+        ...(reasoningTokens ? { reasoningTokens } : {}),
+      }
     }
     const choice = chunk.choices?.[0]
     if (!choice) continue
 
-    if (choice.delta?.content) yield { type: 'text-delta', text: choice.delta.content }
+    const thought = choice.delta?.reasoning_content ?? choice.delta?.reasoning
+    if (thought) {
+      thinking = true
+      yield { type: 'reasoning-delta', text: thought }
+    }
+    if (choice.delta?.content) {
+      if (thinking) {
+        thinking = false
+        yield { type: 'reasoning-end' }
+      }
+      yield { type: 'text-delta', text: choice.delta.content }
+    }
     for (const delta of choice.delta?.tool_calls ?? []) {
       const entry = pending.get(delta.index) ?? { id: '', name: '', args: '' }
       if (delta.id) entry.id = delta.id

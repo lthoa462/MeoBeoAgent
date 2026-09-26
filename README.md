@@ -23,9 +23,62 @@ Ví dụ yêu cầu:
 - `Soạn giáo án 2 tiết Bài 24 – Hoán vị, chỉnh hợp, tổ hợp`
 - `Cho mẫu số liệu 5 7 8 8 9 10 3 6 30, soạn bài tập tính tứ phân vị và tìm giá trị bất thường`
 
-Lệnh trong CLI: `/openai`, `/gemini` (đổi provider giữa chừng, vẫn giữ hội thoại),
-`/search <câu hỏi> [@số bài]` (xem RAG tìm được gì, không gọi model), `/reset`, `/exit`.
+Lệnh trong CLI:
+
+| Lệnh | Tác dụng |
+|---|---|
+| `/openai`, `/gemini` | Đổi provider giữa chừng, vẫn giữ hội thoại |
+| `/think on\|hidden\|off` | Hiện / ẩn / tắt tiến trình suy nghĩ |
+| `/effort low\|medium\|high\|auto` | Mức độ suy nghĩ |
+| `/search <câu hỏi> [@số bài]` | Xem RAG tìm được gì, không gọi model |
+| `/reset`, `/exit` | Xoá hội thoại, thoát |
 Nhấn Ctrl+C khi agent đang chạy để huỷ lượt đó.
+
+## Tiến trình suy nghĩ
+
+MeoBeo hiện quá trình làm việc theo dòng thời gian:
+
+```
+👩‍🏫 > Soạn 1 câu vận dụng bài 17 có tham số m
+
+💭 Suy nghĩ
+│ **Xác định yêu cầu** Giáo viên cần một câu vận dụng về dấu tam thức có tham số m.
+│ **Kế hoạch** Chọn f(x) = x² + 2x + m ... Cần kiểm tra Δ bằng tool trước khi ra đáp án.
+└ 2.0 giây
+🐱 Mình kiểm tra tam thức với m = 2 để chắc đáp án.          ← "commentary": lời dẫn công khai
+⚙ analyze_quadratic({"a":1,"b":2,"c":2})
+✓ {"delta":"-4","roots":"vô nghiệm (Δ < 0)", ...}
+── Bước 2 ──                                                ← agent loop lặp lại
+💭 Suy nghĩ
+│ **Đối chiếu kết quả** Với m = 2 thì Δ = -4 < 0 ...
+└ 1.1 giây
+🐱 Câu hỏi: Tìm m để x² + 2x + m > 0 với mọi x ∈ ℝ. ...
+
+[openai · 5.0 giây · vào 2100 / ra 270, suy nghĩ 160 tokens]
+```
+
+Có hai loại "tiến trình" khác nhau:
+
+| | Suy nghĩ (reasoning) | Lời dẫn (commentary) |
+|---|---|---|
+| Là gì | Model suy luận **trước** khi trả lời; provider trả **bản tóm tắt** | Câu ngắn model viết công khai trước khi gọi tool |
+| Cần gì | Model reasoning + API hỗ trợ | Chỉ cần quy tắc 8 trong `prompt.ts`, model nào cũng làm được |
+| Hiện bằng | `💭 Suy nghĩ` (chữ mờ, nghiêng) | `🐱 ...` trước dòng `⚙` |
+
+Mỗi provider trả suy nghĩ theo một cách khác nhau:
+
+| Provider | Cách bật | Model trả về | Gửi lại ở lượt sau? |
+|---|---|---|---|
+| OpenAI **Responses API** (mặc định) | `reasoning: { effort, summary: 'auto' }` | Tóm tắt qua `response.reasoning_summary_text.delta` + suy nghĩ đầy đủ **đã mã hoá** | Có: gửi lại item mã hoá để model giữ mạch suy nghĩ giữa các lần gọi tool |
+| OpenAI Chat Completions | `reasoning_effort` | **Không** trả suy nghĩ (chỉ đếm token) | Không |
+| Gateway Chat Completions (DeepSeek, OpenRouter, Ollama…) | tuỳ gateway | `delta.reasoning_content` / `delta.reasoning` | Không |
+| Gemini | `thinkingConfig.includeThoughts` | Part có `thought: true` | Không gửi bản tóm tắt; mạch suy nghĩ đi theo `thoughtSignature` |
+
+Lưu ý:
+- Model không phải loại reasoning (vd. dòng GPT-4.x) sẽ báo lỗi khi nhận tham số reasoning. Khi đó dùng `/think off`.
+- OpenAI có thể yêu cầu tổ chức phải **xác minh (verify)** mới xem được bản tóm tắt suy nghĩ. Nếu gặp lỗi này, dùng
+  `/think hidden` (model vẫn suy nghĩ nhưng không hiện nội dung) hoặc xác minh tổ chức trên trang OpenAI Platform.
+- Những gì hiện ra là **bản tóm tắt** do provider tạo, không phải toàn bộ suy luận bên trong model.
 
 ## Thư viện tài liệu (RAG)
 
@@ -84,7 +137,8 @@ src/
     tool.ts             defineTool + kiểm tra tham số
     agent.ts            ★ agent loop: model → tool → model → … → câu trả lời
   providers/            ← chỉ lớp này biết wire format
-    openai.ts           Chat Completions (nối các mẩu JSON tham số tool bị chia nhỏ)
+    openai-responses.ts Responses API: tóm tắt suy nghĩ + gửi lại suy nghĩ mã hoá (mặc định)
+    openai.ts           Chat Completions (nối các mẩu JSON tham số tool bị chia nhỏ) + embeddings
     gemini.ts           streamGenerateContent (functionCall/functionResponse, thoughtSignature)
     index.ts            chọn provider từ .env
   tools/
@@ -99,6 +153,7 @@ src/
   ingest.ts             lệnh npm run ingest
   data/curriculum.ts    mục lục SGK (sửa file này nếu trường bạn dùng bộ sách khác)
   prompt.ts             system prompt: vai trò và quy tắc soạn bài
+  render.ts             vẽ dòng thời gian: 💭 suy nghĩ → ⚙ tool → 🐱 trả lời
   cli.ts                giao diện dòng lệnh
 test/                   test bằng fetch giả, không cần API key
 ```
@@ -109,6 +164,7 @@ test/                   test bằng fetch giả, không cần API key
 |---|---|---|
 | Message, role, system prompt | `core/types.ts`, `prompt.ts` | Hai provider có format khác nhau nhưng agent chỉ thấy một |
 | Streaming | `core/sse.ts`, `translate()` trong từng provider | In chữ ngay khi model sinh ra |
+| Suy nghĩ (reasoning) | `ReasoningPart` trong `core/types.ts`, `render.ts` | Suy nghĩ là một phần của message; có provider cần nhận lại nó |
 | Tool calling | `core/tool.ts`, `tools/*` | Model chỉ *xin* gọi tool; code của bạn mới là thứ thực thi |
 | **Agent loop** | `core/agent.ts` | Một vòng `for` quanh model; lỗi tool được gửi lại để model tự sửa |
 | Giới hạn an toàn | `maxSteps`, bước cuối `toolChoice: 'none'` | Chống lặp vô hạn nhưng vẫn luôn có câu trả lời |
@@ -119,7 +175,7 @@ test/                   test bằng fetch giả, không cần API key
 ## Kiểm tra
 
 ```bash
-npm test          # vitest: agent loop, 2 provider (fetch giả), các tool toán, RAG
+npm test          # vitest: agent loop, provider (fetch giả), suy nghĩ, các tool toán, RAG
 npm run typecheck
 ```
 

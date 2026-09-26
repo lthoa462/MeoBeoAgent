@@ -3,6 +3,7 @@
 //  - role của model là "model"; system prompt nằm ở systemInstruction
 //  - tool call/result là các "part" functionCall / functionResponse
 //  - functionCall có thể kèm thoughtSignature, phải gửi lại nguyên vẹn
+//  - suy nghĩ: bật includeThoughts, các part có thought: true là bản tóm tắt tư duy
 
 import { readSse } from '../core/sse.ts'
 import {
@@ -14,6 +15,7 @@ import {
   type ModelRequest,
   type StreamEvent,
   type ToolCallPart,
+  type Usage,
 } from '../core/types.ts'
 
 export type GeminiOptions = {
@@ -72,6 +74,15 @@ export function buildBody(request: ModelRequest) {
     }]
     body.toolConfig = { functionCallingConfig: { mode: request.toolChoice === 'none' ? 'NONE' : 'AUTO' } }
   }
+  if (request.reasoning) {
+    body.generationConfig = {
+      thinkingConfig: {
+        includeThoughts: true,
+        // thinkingLevel dành cho Gemini 3 ("low" | "high"...); Gemini 2.5 tự quyết mức suy nghĩ.
+        ...(request.reasoning.effort ? { thinkingLevel: request.reasoning.effort } : {}),
+      },
+    }
+  }
   return body
 }
 
@@ -80,14 +91,16 @@ function toWireContent(message: Message, nativeIds: Set<string>): [WireContent['
     case 'user':
       return ['user', message.parts.map(part => ({ text: part.text }))]
     case 'assistant':
-      return ['model', message.parts.map(part => {
-        if (part.type === 'text') return { text: part.text }
+      // Không gửi lại bản tóm tắt suy nghĩ: Gemini tự nối mạch tư duy qua thoughtSignature.
+      return ['model', message.parts.flatMap((part): WirePart[] => {
+        if (part.type === 'reasoning') return []
+        if (part.type === 'text') return [{ text: part.text }]
         const meta = part.providerMeta ?? {}
         if (meta.nativeId) nativeIds.add(part.id)
-        return {
+        return [{
           functionCall: { ...(meta.nativeId ? { id: part.id } : {}), name: part.name, args: part.args },
           ...(meta.thoughtSignature ? { thoughtSignature: meta.thoughtSignature } : {}),
-        }
+        }]
       })]
     case 'tool':
       // Gemini: kết quả tool là part functionResponse trong một content role "user".
@@ -119,7 +132,7 @@ type Chunk = {
 
 export async function* translate(data: AsyncIterable<string>): AsyncGenerator<StreamEvent> {
   let finish: FinishReason = 'other'
-  let usage: { inputTokens?: number; outputTokens?: number } | undefined
+  let usage: Usage | undefined
   let sawToolCall = false
 
   for await (const raw of data) {
@@ -129,11 +142,15 @@ export async function* translate(data: AsyncIterable<string>): AsyncGenerator<St
       usage = {
         inputTokens: meta.promptTokenCount,
         outputTokens: (meta.candidatesTokenCount ?? 0) + (meta.thoughtsTokenCount ?? 0),
+        ...(meta.thoughtsTokenCount ? { reasoningTokens: meta.thoughtsTokenCount } : {}),
       }
     }
     const candidate = chunk.candidates?.[0]
     for (const part of candidate?.content?.parts ?? []) {
-      if (part.thought) continue // tóm tắt suy luận nội bộ, không hiển thị
+      if (part.thought) {
+        if (part.text) yield { type: 'reasoning-delta', text: part.text }
+        continue
+      }
       if (part.text) yield { type: 'text-delta', text: part.text }
       if (part.functionCall) {
         sawToolCall = true

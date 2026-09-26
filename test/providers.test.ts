@@ -37,7 +37,7 @@ describe('OpenAI adapter', () => {
 
     const events = await collect(runAgent({ adapter, model: 'gpt-test', system: 'Bạn là MeoBeo', history, tools: [square] }))
 
-    expect(events.at(-1)).toEqual({ type: 'done', text: '7² = 49', reason: 'completed', usage: { inputTokens: 120, outputTokens: 15 } })
+    expect(events.at(-1)).toEqual({ type: 'done', text: '7² = 49', reason: 'completed', usage: { inputTokens: 120, outputTokens: 15, reasoningTokens: 0 } })
     expect(requests[0]!.url).toBe('https://api.openai.com/v1/chat/completions')
     expect(requests[0]!.headers.authorization).toBe('Bearer sk-test')
     expect(requests[0]!.body).toMatchObject({
@@ -79,7 +79,7 @@ describe('Gemini adapter', () => {
 
     const events = await collect(runAgent({ adapter, model: 'gemini-test', system: 'Bạn là MeoBeo', history, tools: [square] }))
 
-    expect(events.at(-1)).toEqual({ type: 'done', text: '7² = 49', reason: 'completed', usage: { inputTokens: 100, outputTokens: 24 } })
+    expect(events.at(-1)).toEqual({ type: 'done', text: '7² = 49', reason: 'completed', usage: { inputTokens: 100, outputTokens: 24, reasoningTokens: 12 } })
     expect(requests[0]!.url).toBe('https://generativelanguage.googleapis.com/v1beta/models/gemini-test:streamGenerateContent?alt=sse')
     expect(requests[0]!.headers['x-goog-api-key']).toBe('g-test')
     expect(requests[0]!.body).toMatchObject({
