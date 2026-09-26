@@ -73,3 +73,18 @@ export class ProviderError extends Error {
     this.name = 'ProviderError'
   }
 }
+
+// ---- Embedding (dùng cho RAG) ----------------------------------------------
+
+/**
+ * "document": đoạn tài liệu đưa vào kho; "query": câu tìm kiếm.
+ * Một số provider (Gemini) tối ưu vector khác nhau cho hai mục đích này.
+ */
+export type EmbeddingPurpose = 'document' | 'query'
+
+/** Biến văn bản thành vector số; hai đoạn cùng ý nghĩa sẽ có vector gần nhau. */
+export interface EmbeddingAdapter {
+  readonly provider: string
+  readonly model: string
+  embed(texts: string[], purpose: EmbeddingPurpose, signal?: AbortSignal): Promise<number[][]>
+}

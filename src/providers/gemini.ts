@@ -9,6 +9,7 @@ import {
   ProviderError,
   type FinishReason,
   type Message,
+  type EmbeddingAdapter,
   type ModelAdapter,
   type ModelRequest,
   type StreamEvent,
@@ -160,4 +161,38 @@ function mapFinish(reason: string): FinishReason {
   if (reason === 'STOP') return 'stop'
   if (reason === 'MAX_TOKENS') return 'length'
   return 'other'
+}
+
+// ---- Embeddings (models/{model}:batchEmbedContents) -------------------------
+
+export function geminiEmbedding(options: GeminiOptions & { model: string }): EmbeddingAdapter {
+  const baseUrl = (options.baseUrl ?? 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, '')
+  const doFetch = options.fetch ?? fetch
+  const BATCH = 100
+
+  return {
+    provider: 'gemini',
+    model: options.model,
+    async embed(texts, purpose, signal) {
+      const vectors: number[][] = []
+      for (let i = 0; i < texts.length; i += BATCH) {
+        const response = await doFetch(`${baseUrl}/models/${encodeURIComponent(options.model)}:batchEmbedContents`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-goog-api-key': options.apiKey },
+          body: JSON.stringify({
+            requests: texts.slice(i, i + BATCH).map(text => ({
+              model: `models/${options.model}`,
+              content: { parts: [{ text }] },
+              taskType: purpose === 'query' ? 'RETRIEVAL_QUERY' : 'RETRIEVAL_DOCUMENT',
+            })),
+          }),
+          signal,
+        })
+        if (!response.ok) throw new ProviderError('gemini', response.status, await response.text())
+        const json = await response.json() as { embeddings: { values: number[] }[] }
+        vectors.push(...json.embeddings.map(item => item.values))
+      }
+      return vectors
+    },
+  }
 }

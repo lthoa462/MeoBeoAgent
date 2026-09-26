@@ -7,6 +7,7 @@ import {
   ProviderError,
   type FinishReason,
   type Message,
+  type EmbeddingAdapter,
   type ModelAdapter,
   type ModelRequest,
   type StreamEvent,
@@ -151,4 +152,33 @@ function mapFinish(reason: string): FinishReason {
   if (reason === 'tool_calls') return 'tool-calls'
   if (reason === 'length') return 'length'
   return 'other'
+}
+
+// ---- Embeddings (POST /embeddings) ------------------------------------------
+
+export function openAiEmbedding(options: OpenAiOptions & { model: string }): EmbeddingAdapter {
+  const baseUrl = (options.baseUrl ?? 'https://api.openai.com/v1').replace(/\/$/, '')
+  const doFetch = options.fetch ?? fetch
+  const BATCH = 100
+
+  return {
+    provider: 'openai',
+    model: options.model,
+    async embed(texts, _purpose, signal) {
+      const vectors: number[][] = []
+      for (let i = 0; i < texts.length; i += BATCH) {
+        const response = await doFetch(`${baseUrl}/embeddings`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${options.apiKey}` },
+          body: JSON.stringify({ model: options.model, input: texts.slice(i, i + BATCH) }),
+          signal,
+        })
+        if (!response.ok) throw new ProviderError('openai', response.status, await response.text())
+        const json = await response.json() as { data: { index: number; embedding: number[] }[] }
+        // Sắp theo index cho chắc thứ tự khớp với input.
+        vectors.push(...json.data.sort((a, b) => a.index - b.index).map(item => item.embedding))
+      }
+      return vectors
+    },
+  }
 }
