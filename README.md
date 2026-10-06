@@ -1,187 +1,564 @@
-# 🐱 MeoBeo Agent
+# MeoBeo Summarizer
 
-AI agent chạy trên terminal, hỗ trợ giáo viên **soạn bài môn Toán lớp 10**: giáo án, phiếu bài tập,
-đề kiểm tra kèm lời giải. Chạy được với **OpenAI** và **Gemini**.
+Chatbot multi-agent **tóm tắt group chat và kênh Microsoft Teams**: ý chính, quyết định, việc cần làm
+(ai phụ trách, hạn chót) và trả lời câu hỏi về những gì đã trao đổi, có trích dẫn số tin nhắn `#n`.
 
-Đây cũng là một project để học cách build AI agent từ đầu. Code được viết tay, không dùng SDK của
-provider, và lấy cảm hứng từ kiến trúc của
-[alvin0/ai-agent-sdk](https://github.com/alvin0/ai-agent-sdk).
+MeoBeo có hai cửa vào, dùng chung một bộ agent:
 
-## Chạy thử
+- **Giao diện web**: đăng nhập bằng tài khoản Microsoft, chọn một group chat hoặc một kênh rồi hỏi.
+  Backend đọc tin nhắn bằng chính quyền của bạn (token Microsoft Graph *delegated*).
+- **Bot Teams**: @MeoBeo trong group chat hoặc kênh. Bot đọc lịch sử bằng quyền của app
+  (*resource-specific consent* – RSC) mà thành viên đồng ý khi cài app vào cuộc trò chuyện đó.
 
-Yêu cầu Node.js ≥ 22.
+Xây dựng trên [`@alvin0/ai-agent-sdk`](https://github.com/alvin0/ai-agent-sdk) 0.1.9, chạy với
+**OpenAI** hoặc **Google Gemini** (và một provider `mock` để chạy thử không cần key).
+
+## Mục lục
+
+- [Tính năng](#tính-năng)
+- [Quyền riêng tư](#quyền-riêng-tư)
+- [Kiến trúc](#kiến-trúc)
+- [Cấu trúc thư mục](#cấu-trúc-thư-mục)
+- [Chạy thử nhanh (demo)](#chạy-thử-nhanh-demo)
+- [Cài đặt thật](#cài-đặt-thật)
+- [Cách dùng](#cách-dùng)
+- [Lệnh npm](#lệnh-npm)
+- [Biến môi trường](#biến-môi-trường)
+- [Giới hạn và hành vi](#giới-hạn-và-hành-vi)
+- [Xử lý sự cố](#xử-lý-sự-cố)
+- [Triển khai production](#triển-khai-production)
+- [Ghi công](#ghi-công)
+
+## Tính năng
+
+- **Hỏi bằng ngôn ngữ tự nhiên, tự hiểu khoảng thời gian**: "24 giờ qua", "hôm qua", "từ thứ Hai",
+  "tuần trước", "30 ngày qua"… Agent tự suy ra khoảng thời gian từ giờ hiện tại và múi giờ của bạn.
+  Không nói rõ thì mặc định 24 giờ.
+- **Tóm tắt, việc cần làm, hỏi đáp**: coordinator chọn chuyên gia phù hợp (summarizer,
+  action-tracker, qa) và gọi song song nếu yêu cầu cần nhiều thứ một lúc.
+- **Hội thoại dài vẫn đọc hết**: hội thoại được chia phần theo số token. Nhiều worker đọc song song
+  (map), rồi chuyên gia gộp lại (reduce). Tối đa 30 ngày và `MAX_MESSAGES` tin.
+- **Hỏi tiếp không cần đọc lại**: trong vài phút (`TRANSCRIPT_CACHE_TTL_MS`), câu hỏi tiếp theo về
+  cùng khoảng thời gian dùng lại bản đã đọc trong RAM.
+- **Web**:
+  - Danh sách group chat, team › kênh có ô lọc.
+  - Nút gợi ý nhanh: 24 giờ / 3 ngày / 7 ngày / việc cần làm 30 ngày.
+  - Câu trả lời stream (SSE), kèm dòng thời gian các bước: đọc tin, agent nào đang chạy, bao nhiêu phần.
+  - Nút **Dừng** và **Cuộc trò chuyện mới**.
+- **Teams**:
+  - Trả lời khi được @mention trong group chat và kênh.
+  - Gửi tin "đang xử lý" rồi cập nhật tiến trình và kết quả ngay trên tin đó.
+  - Chào khi được cài vào cuộc trò chuyện.
+  - Trong chat 1:1 thì hướng dẫn cách dùng và gửi link web.
+- **Chế độ demo**: một nhóm chat giả lập (~120 tin nhắn tiếng Việt trong 12 ngày). Chạy toàn bộ luồng
+  mà không cần Azure; nếu dùng `LLM_PROVIDER=mock` thì cũng không cần API key.
+
+## Quyền riêng tư
+
+Đây là yêu cầu cứng của sản phẩm. Code được viết để giữ đúng các điểm dưới đây.
+
+- **Không lưu tin nhắn.** Không có cơ sở dữ liệu, không ghi tin nhắn ra đĩa. Tin nhắn chỉ nằm trong
+  RAM của tiến trình server:
+  - trong một lượt trả lời;
+  - hoặc tối đa `TRANSCRIPT_CACHE_TTL_MS` (mặc định 10 phút; đặt `0` để chỉ giữ trong lượt) để trả lời
+    câu hỏi tiếp theo.
+- **Lịch sử hỏi đáp** của mỗi cuộc trò chuyện cũng chỉ ở RAM. Lịch sử này chứa câu hỏi của bạn, thống
+  kê và kết quả tóm tắt (có thể trích một phần nội dung), không chứa toàn văn hội thoại. Phiên bị xoá
+  sau `SESSION_TTL_MS` không dùng (mặc định 30 phút). Khởi động lại server là mất hết.
+- **Chỉ đọc khi được yêu cầu, tối đa 30 ngày.**
+  - Tin nhắn được lấy từ Microsoft Graph tại thời điểm bạn hỏi, đúng khoảng thời gian cần.
+  - Khoảng thời gian luôn bị server kẹp trong 30 ngày gần nhất (`HARD_MAX_LOOKBACK_DAYS`), dù model có
+    yêu cầu gì. Khi bị kẹp, câu trả lời sẽ nói rõ.
+- **Model không chọn được đọc ở đâu.**
+  - Model chỉ chọn được *khoảng thời gian* và *câu hỏi*.
+  - Cuộc trò chuyện cần đọc và thông tin đăng nhập do host gắn vào từng lượt (`TurnContext`). Chúng
+    không bao giờ là tham số của tool.
+- **Không log nội dung.**
+  - Không ghi nội dung tin nhắn, prompt hay token vào log.
+  - Observability của SDK để mặc định không kèm nội dung.
+  - Log lỗi chỉ ghi thông báo hoặc mã lỗi, không kèm nội dung request.
+- **Trình duyệt không lưu hội thoại.**
+  - Nội dung chat chỉ nằm trong bộ nhớ React; tải lại trang là mất.
+  - MSAL giữ token đăng nhập trong `sessionStorage`, nên đóng tab là đăng xuất khỏi app.
+  - Backend chỉ chuyển token tới Graph, không lưu token. Backend xác định người dùng qua `/me` và chỉ
+    giữ ánh xạ băm(token) → id người dùng trong RAM vài phút.
+- **Bot nhận mọi tin nhưng bỏ qua tin không nhắc tới nó.** Với RSC, Teams gửi tới bot *mọi* tin trong
+  chat/kênh đã cài app. Tin không @MeoBeo bị bỏ qua ngay: không xử lý, không log, không lưu.
+- **Nội dung tin nhắn là dữ liệu không tin cậy** (chống prompt injection):
+  - Coordinator không bao giờ thấy tin nhắn gốc: `load_messages` chỉ trả về thống kê.
+  - Các agent đọc tin nhắn (chuyên gia, chunk-reader) không có tool nào, nên chữ trong tin nhắn không
+    thể khiến agent làm gì ngoài viết văn bản.
+  - Mỗi tin được định dạng thành một dòng `[#n dd/MM HH:mm] Tên: …`. Dòng tiếp theo của cùng một tin
+    luôn thụt lề, nên nội dung không giả được thành một tin khác.
+  - Link trong câu trả lời được mở với `Referrer-Policy: no-referrer`.
+- **Lưu ý về nhà cung cấp mô hình AI.**
+  - Để tóm tắt, nội dung trong khoảng thời gian được yêu cầu *được gửi tới OpenAI hoặc Google Gemini*
+    (provider bạn cấu hình). Chính sách lưu và sử dụng dữ liệu của provider đó vẫn áp dụng.
+  - Với dữ liệu công việc, hãy dùng gói trả phí/doanh nghiệp không dùng dữ liệu để huấn luyện. Gói miễn
+    phí của Gemini API có thể dùng dữ liệu để cải thiện sản phẩm. Cân nhắc thêm Zero Data Retention nếu
+    tổ chức yêu cầu.
+
+## Kiến trúc
+
+Một tiến trình Next.js phục vụ cả giao diện, API cho web và endpoint của bot Teams, cùng trên cổng 3000:
+
+```
+ Trình duyệt (React + MSAL)                       Microsoft Teams
+   │ Authorization: Bearer <token Graph>            │ @MeoBeo trong group chat / kênh
+   │                                                │ Bot Service ─▶ POST /api/messages
+   ▼                                                ▼
+┌─────────────────────── Next.js :3000 · app/api/[[...route]] ─────────────────────────┐
+│  Hono app (packages/backend/src/http/app.ts)                                         │
+│    GET  /api/health    GET  /api/sources    POST /api/chat (SSE)    POST /api/reset  │
+│    POST /api/messages ─▶ Teams SDK v2 (@microsoft/teams.apps, kiểm tra JWT)          │
+│             │                                    │                                   │
+│             └────────────────┬───────────────────┘                                   │
+│                              ▼                                                       │
+│     ConversationManager: phiên trong RAM, mỗi cuộc trò chuyện 1 lượt một lúc         │
+│                              │  TurnContext = nguồn + fetcher + múi giờ (host gắn)   │
+│                              ▼                                                       │
+│     coordinator "MeoBeo" ──tools──▶ load_messages ──▶ MessageFetcher                 │
+│                              │                         web: token người dùng         │
+│                              │                         bot: token app (RSC)          │──▶ Microsoft Graph
+│                              ▼                                                       │
+│     summarize_messages · extract_action_items · answer_question                      │
+│                              ▼                                                       │
+│     chuyên gia summarizer · action-tracker · qa ──▶ chunk-reader × N                 │
+└──────────────────────────────────────────┬───────────────────────────────────────────┘
+                                           ▼
+                          OpenAI / Google Gemini (hoặc mock)
+```
+
+`npm run serve` chạy cùng Hono app đó bằng `@hono/node-server`, không có giao diện. Lệnh này dùng khi
+chỉ cần backend và bot.
+
+### Một lượt multi-agent
+
+```
+"tóm tắt tuần này, ai đang giữ việc gì?"
+   │
+   ▼
+coordinator ──① load_messages {since, until}──▶ kẹp ≤ 30 ngày → Graph → normalize → chia phần → RAM
+   │          ◀── chỉ thống kê: transcriptId, số tin, người tham gia, bị kẹp/bị cắt…
+   │
+   ├──② summarize_messages {transcriptId}     ─┐ cùng một bước → chạy song song
+   └──② extract_action_items {transcriptId}   ─┤
+                                               ▼
+                       runSpecialist(kind, transcript, task)  — host điều phối
+                         1 phần  → chuyên gia đọc thẳng                          [single]
+                         n phần  → chunk-reader × n, ≤ MAP_CONCURRENCY cùng lúc  [map]
+                                 → chuyên gia gộp ghi chú (nhiều tầng nếu dài)   [reduce]
+   ◀───────────────── kết quả từng chuyên gia ─┘
+   │
+   ③ câu trả lời cuối: ý chính, quyết định, việc cần làm (ai, hạn), trích dẫn #n
+```
+
+Tiến trình (đã đọc bao nhiêu tin, agent nào ở bước nào, `done/total`) được gửi về:
+
+- web: qua các frame SSE (`fetch-progress`, `transcript`, `agent-progress`, `tool-call`, `tool-result`…);
+- Teams: thành dòng trạng thái trên tin nhắn tạm.
+
+### Vì sao agent-as-tool + map-reduce do host điều phối, không dùng `AgentTeam` của SDK
+
+Tài liệu SDK (`skills/ai-agent-sdk/references/orchestration.md`) chia hai kiểu điều phối:
+
+- **Model quyết định**: `createManagedAgentTeam` / `spawn_agent`. Hợp khi chưa biết trước hình dạng
+  công việc.
+- **Code của bạn quyết định**: `Promise.all` trên `agent.generate()`. Hợp khi "topology là kiến trúc,
+  không phải lựa chọn lúc chạy". Mỗi `generate()` là một run độc lập, có budget, trace và report
+  riêng, và *không chia sẻ gì ngầm*.
+
+Bài toán của MeoBeo thuộc kiểu thứ hai:
+
+- **Request/response.** Mỗi yêu cầu web hay tin nhắn Teams là một lượt, kết thúc bằng một câu trả lời.
+  `AgentTeam` được thiết kế cho cộng tác giữa các session **sống lâu** trong tiến trình (mailbox,
+  `wait_agents`, `followup_task`), nên ở đây sẽ phải dựng rồi huỷ cả đội mỗi lượt.
+- **Fan-out xác định.** Số worker bằng đúng số phần của hội thoại, có giới hạn song song, nên tiến
+  trình `done/total` hiển thị chính xác. `AbortSignal` từ nút Dừng hoặc khi client ngắt kết nối đi
+  xuống tới từng lần gọi model.
+- **Cách ly dữ liệu.** Nội dung tin nhắn chỉ đi vào các run chuyên gia/worker không có tool. Lịch sử
+  của coordinator chỉ chứa thống kê và kết quả đã tóm tắt. Điều này vừa giữ context nhỏ vừa chặn
+  prompt injection.
+- **Model vẫn quyết định chiến thuật.** Model chọn khoảng thời gian, chọn gọi chuyên gia nào, và gọi
+  nhiều chuyên gia trong một bước. Các tool chuyên gia khai báo `isConcurrencySafe`, nên chúng chạy
+  song song.
+
+## Cấu trúc thư mục
+
+```
+.
+├── package.json                 npm workspaces + các lệnh (dev, build, test, teams:package…)
+├── tsconfig.base.json           strict, exactOptionalPropertyTypes, noUncheckedIndexedAccess
+├── .env.example                 mọi biến môi trường, chú thích tiếng Việt
+├── packages/backend/            @meobeo/backend — TypeScript thuần (ESM, không cần build)
+│   ├── src/
+│   │   ├── config.ts            đọc biến môi trường; giá trị sai → mặc định; trần cứng 30 ngày
+│   │   ├── types.ts             kiểu dùng chung: ConversationSource, Transcript, TurnContext…
+│   │   ├── wire.ts              giao thức SSE/JSON giữa backend và giao diện
+│   │   ├── services.ts          composition root (singleton trên globalThis)
+│   │   ├── index.ts             export cho apps/web
+│   │   ├── http/app.ts          Hono: /health, /sources, /chat, /reset, /messages
+│   │   ├── agents/              team (các agent), tools, specialists (map-reduce), session, prompts
+│   │   ├── llm/                 runtime OpenAI/Gemini + provider mock chạy offline
+│   │   ├── graph/               client (phân trang, retry 429), token app-only, messages, sources
+│   │   ├── transcript/          range (kẹp 30 ngày), normalize, chunk, cache RAM, build
+│   │   ├── teams/               bot Teams (Teams SDK v2) và adapter gắn vào Hono
+│   │   ├── demo/fixture.ts      nhóm chat giả lập cho DEMO_MODE
+│   │   └── serve.ts             chạy backend + bot không cần Next.js
+│   └── test/                    vitest — fetch giả + provider mock, không cần mạng hay API key
+├── apps/web/                    @meobeo/web — Next.js 16 + React 19
+│   ├── next.config.ts           nạp .env gốc, biên dịch backend, header bảo mật
+│   └── src/
+│       ├── app/api/[[...route]]/route.ts   chuyển mọi /api/* vào Hono app
+│       └── ui/                  MSAL, chọn nguồn, khung chat, Markdown, đọc SSE
+└── apps/teams-app/              gói app Teams
+    ├── manifest.template.json   manifest v1.30: bot, webApplicationInfo, quyền RSC
+    ├── color.png, outline.png   icon 192×192 và 32×32
+    └── scripts/
+        ├── make-icons.mjs       vẽ lại hai icon (chỉ dùng node:zlib)
+        └── package.mjs          điền .env vào manifest → build/meobeo-teams.zip
+```
+
+## Chạy thử nhanh (demo)
+
+Cần Node.js ≥ 22.12.
 
 ```bash
 npm install
-cp .env.example .env    # điền API key và tên model
-npm start
+LLM_PROVIDER=mock DEMO_MODE=1 npm run dev
 ```
 
-Ví dụ yêu cầu:
+Mở <http://localhost:3000>. Chế độ demo bỏ qua đăng nhập Microsoft và mở thẳng nhóm chat giả lập.
+Thử các nút gợi ý hoặc gõ "việc cần làm tuần này".
 
-- `Soạn phiếu 10 câu trắc nghiệm Bài 17 – Dấu của tam thức bậc hai, 3 mức độ, có đáp án`
-- `Soạn giáo án 2 tiết Bài 24 – Hoán vị, chỉnh hợp, tổ hợp`
-- `Cho mẫu số liệu 5 7 8 8 9 10 3 6 30, soạn bài tập tính tứ phân vị và tìm giá trị bất thường`
+- `LLM_PROVIDER=mock` là provider soạn sẵn, không gọi mạng. Nó đi đúng luồng thật: `load_messages`,
+  hai chuyên gia chạy song song, map-reduce. Nhưng câu trả lời chỉ là đoạn trích máy móc từ tin
+  nhắn, **không phải bản tóm tắt thật**.
+- Muốn xem tóm tắt thật trên dữ liệu giả: giữ `DEMO_MODE=1`, đặt `OPENAI_API_KEY` + `OPENAI_MODEL`
+  (hoặc Gemini) và bỏ `LLM_PROVIDER=mock`.
+- Trên Windows PowerShell: `$env:LLM_PROVIDER="mock"; $env:DEMO_MODE="1"; npm run dev`. Hoặc ghi hai
+  biến này vào `.env`.
 
-Lệnh trong CLI:
+Không bật `DEMO_MODE` trên server công khai, kể cả khi đang mở devtunnel: chế độ demo không yêu cầu
+đăng nhập.
+
+## Cài đặt thật
+
+```bash
+cp .env.example .env
+```
+
+Mọi cấu hình nằm trong `.env` ở **thư mục gốc**. Web, backend, bot và `teams:package` đều đọc file
+này. Biến đặt trên dòng lệnh luôn thắng giá trị trong `.env`.
+
+### a) Khoá mô hình AI
+
+Chọn một provider:
+
+```dotenv
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=<model bạn chọn>          # bắt buộc; model hỗ trợ gọi tool
+# OPENAI_REASONING_EFFORT=medium       # tuỳ chọn, cho model reasoning
+
+# hoặc
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=...
+GEMINI_MODEL=<model bạn chọn>          # bắt buộc; model hỗ trợ function calling
+```
+
+- Tên model do bạn chọn; MeoBeo không gắn sẵn model nào.
+- `WORKER_MODEL` (tuỳ chọn) là một model rẻ/nhanh hơn của cùng provider. Model này dùng cho các worker
+  đọc từng phần hội thoại dài.
+
+### b) Đăng ký app Entra ID
+
+Dùng **một** app registration cho cả bot và web. Nếu bạn tạo bot bằng Teams CLI ở bước (c), CLI đã
+tạo sẵn app này. Khi đó chỉ cần mở app đó trong Entra và làm tiếp mục 2–3 bên dưới.
+
+1. [Entra admin center](https://entra.microsoft.com) → **App registrations** → **New registration**.
+   - Ghi lại **Application (client) ID** → `CLIENT_ID`.
+   - Ghi lại **Directory (tenant) ID** → `TENANT_ID`.
+2. **Authentication** → **Add a platform** → **Single-page application**.
+   - Redirect URI: `http://localhost:3000`.
+   - Thêm địa chỉ thật nếu có, ví dụ `https://<tunnel-hoặc-domain>`.
+   - Phải là nền tảng *SPA*, không phải *Web*. MSAL dùng popup với redirect URI là origin của trang.
+3. **API permissions** → **Microsoft Graph** → **Delegated permissions**, thêm:
+
+   | Quyền | Dùng để |
+   |---|---|
+   | `User.Read` | biết bạn là ai (`/me`) |
+   | `Chat.Read` | liệt kê và đọc group chat của bạn |
+   | `ChannelMessage.Read.All` | đọc tin nhắn kênh — **cần admin consent** |
+   | `Team.ReadBasic.All` | liệt kê team bạn tham gia |
+   | `Channel.ReadBasic.All` | liệt kê kênh của team |
+
+   Sau đó bấm **Grant admin consent** (cần quyền quản trị). Web xin cả 5 quyền trong một lần đăng nhập.
+   Chưa có admin consent thì người dùng thường gặp màn hình "Cần quản trị viên phê duyệt"
+   (`AADSTS65001` / `AADSTS90094`) và không đăng nhập được.
+4. **Certificates & secrets** → **New client secret** → `CLIENT_SECRET`. Bot dùng secret này để xác
+   thực với Bot Framework và lấy token app-only đọc tin qua RSC.
+
+Quyền RSC của bot (`ChatMessage.Read.Chat`, `ChannelMessage.Read.Group`) **không** thêm ở đây. Chúng
+nằm trong manifest Teams và được cấp khi cài app vào từng cuộc trò chuyện.
+
+Web dùng `NEXT_PUBLIC_AZURE_CLIENT_ID` / `NEXT_PUBLIC_AZURE_TENANT_ID`. Nếu để trống, web lấy
+`CLIENT_ID` / `TENANT_ID`. Hai giá trị này được nhúng vào JavaScript lúc chạy `npm run dev` / `npm run
+build`, nên đổi xong phải chạy lại.
+
+### c) Đăng ký bot
+
+**Cách 1: Teams CLI** (nhanh nhất)
+
+Lệnh dưới tạo app Entra, client secret, bot (Teams-managed) và app Teams trong Developer Portal. Nó
+cũng ghi `CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID` vào `.env`.
+
+```bash
+npm i -g @microsoft/teams.cli
+teams login
+teams app create --name MeoBeo --endpoint https://<tunnel>/api/messages --env .env
+```
+
+- CLI in ra **Teams App ID**. Đặt giá trị đó vào `TEAMS_APP_ID` để gói ở bước (e) cập nhật đúng app
+  này, thay vì tạo app thứ hai cho cùng bot.
+- `<tunnel>` là địa chỉ ở bước (d), nên hãy tạo tunnel trước. Nếu đổi địa chỉ sau này, cập nhật bằng
+  `teams app update <Teams App ID> --endpoint https://<tunnel-mới>/api/messages`.
+- Sau đó làm mục 2–3 của bước (b) cho app vừa tạo.
+
+**Cách 2: Azure Bot**
+
+1. Azure portal → tạo resource **Azure Bot**.
+2. Chọn *Use existing app registration*, nhập `CLIENT_ID` và đúng loại tenant của app.
+3. **Configuration** → **Messaging endpoint**: `https://<host>/api/messages`.
+4. **Channels** → bật **Microsoft Teams**.
+
+### d) Mở cổng ra Internet bằng devtunnel
+
+Bot Service phải gọi được tới máy bạn qua https. Next.js phục vụ endpoint bot trên cùng cổng 3000
+với giao diện:
+
+```bash
+devtunnel user login
+devtunnel create meobeo --allow-anonymous
+devtunnel port create meobeo -p 3000
+devtunnel host meobeo                 # in ra https://<id>-3000.<vùng>.devtunnels.ms
+npm run dev                           # ở terminal khác
+```
+
+Sau khi có địa chỉ tunnel:
+
+- đặt `WEB_URL=https://<id>-3000.<vùng>.devtunnels.ms`;
+- đặt messaging endpoint của bot là `https://<id>-3000.<vùng>.devtunnels.ms/api/messages`;
+- muốn đăng nhập web qua tunnel thì thêm địa chỉ đó vào redirect URI SPA.
+
+`--allow-anonymous` là bắt buộc vì Bot Service không đăng nhập devtunnel. Endpoint vẫn an toàn vì
+Teams SDK kiểm tra JWT của mọi request.
+
+### e) Đóng gói và cài app vào Teams
+
+```bash
+npm run teams:package
+```
+
+Lệnh này cần `CLIENT_ID` và `WEB_URL` (hoặc `BOT_DOMAIN`). Nó tạo:
+
+- `apps/teams-app/build/manifest.json`;
+- `apps/teams-app/build/meobeo-teams.zip` (manifest + 2 icon).
+
+`TEAMS_APP_ID` lấy từ `.env`. Nếu không có, script tự tạo một lần và giữ trong
+`apps/teams-app/build/.app-id`.
+
+Cài app:
+
+1. Teams → **Apps** → **Manage your apps** → **Upload an app** → **Upload a custom app** → chọn file zip.
+   - Tenant phải cho phép tải custom app: Teams admin center → *Setup policies* → *Upload custom apps*.
+2. Thêm MeoBeo vào **group chat** hoặc **team**. Màn hình cài đặt sẽ xin quyền RSC:
+   - đọc tin nhắn của chat này (`ChatMessage.Read.Chat`);
+   - đọc tin nhắn kênh của team này (`ChannelMessage.Read.Group`).
+
+   Tenant phải cho phép resource-specific consent cho chat/team (cài đặt RSC của quản trị viên).
+   Nếu không, bot sẽ bị Graph trả 403.
+3. Khi sửa manifest hoặc đổi `WEB_URL`, tăng `TEAMS_APP_VERSION` rồi đóng gói và tải lên lại.
+
+`node apps/teams-app/scripts/make-icons.mjs` vẽ lại `color.png` / `outline.png` (không cần thư viện
+ảnh).
+
+### f) Thử bot trên máy với Microsoft 365 Agents Playground
+
+Playground giả lập Teams, không cần tunnel hay đăng ký bot:
+
+```bash
+npm i -g @microsoft/m365agentsplayground
+DANGEROUSLY_ALLOW_UNAUTHENTICATED_REQUESTS=true LLM_PROVIDER=mock npm run dev
+agentsplayground -e http://localhost:3000/api/messages -c emulator     # terminal khác
+```
+
+- `DANGEROUSLY_ALLOW_UNAUTHENTICATED_REQUESTS` tắt kiểm tra token. **Chỉ dùng trên máy mình**, không
+  bao giờ khi đang mở tunnel hay trên server.
+- Playground không có Microsoft Graph/RSC thật. Nó chỉ thử được luồng nhận tin, @mention, tin nhắn tạm
+  và trả lời, không thử được bước đọc lịch sử chat thật.
+
+**Chạy backend + bot không có giao diện:**
+
+```bash
+npm run serve
+```
+
+Lệnh này lắng nghe ở cổng `PORT` (mặc định 3978), endpoint bot `http://localhost:3978/api/messages`.
+
+## Cách dùng
+
+### Trên web
+
+1. Đăng nhập Microsoft. Chọn một group chat hoặc **team › kênh** ở cột trái (có ô lọc).
+2. Hỏi, hoặc bấm nút gợi ý. Ví dụ:
+   - `Tóm tắt 24 giờ qua`
+   - `Từ thứ Hai tới giờ nhóm đã chốt những gì?`
+   - `Liệt kê việc cần làm trong 7 ngày qua, ai phụ trách, hạn khi nào`
+   - `Tuần trước ai hỏi về hợp đồng với khách hàng X, đã có ai trả lời chưa?`
+   - `Tóm tắt 30 ngày qua, tập trung vào ngân sách`
+3. Hỏi tiếp trong cùng cuộc trò chuyện, ví dụ "còn việc của Lan thì sao?". Nếu cùng khoảng thời gian
+   và còn trong TTL, MeoBeo dùng lại bản đã đọc.
+   - **Dừng** huỷ lượt đang chạy.
+   - **Cuộc trò chuyện mới** xoá lịch sử hỏi đáp về nguồn đó.
+
+Web đọc được cả chat 1:1 của bạn vì dùng quyền delegated của chính bạn.
+
+### Trong Teams
+
+```
+@MeoBeo tóm tắt 24 giờ qua
+@MeoBeo việc cần làm tuần này
+@MeoBeo hôm qua đã chốt gì về lịch release?
+@MeoBeo tóm tắt kênh này từ đầu tháng
+```
+
+MeoBeo gửi ngay một tin "đang xử lý", cập nhật tiến trình trên chính tin đó, rồi thay bằng câu trả
+lời. Mỗi cuộc trò chuyện xử lý một yêu cầu một lúc. Gõ `@MeoBeo` để thấy các lệnh gợi ý.
+
+## Lệnh npm
+
+Chạy ở thư mục gốc:
 
 | Lệnh | Tác dụng |
 |---|---|
-| `/openai`, `/gemini` | Đổi provider giữa chừng, vẫn giữ hội thoại |
-| `/think on\|hidden\|off` | Hiện / ẩn / tắt tiến trình suy nghĩ |
-| `/effort low\|medium\|high\|auto` | Mức độ suy nghĩ |
-| `/search <câu hỏi> [@số bài]` | Xem RAG tìm được gì, không gọi model |
-| `/reset`, `/exit` | Xoá hội thoại, thoát |
-Nhấn Ctrl+C khi agent đang chạy để huỷ lượt đó.
+| `npm run dev` | Next.js dev ở <http://localhost:3000>: giao diện + `/api/*` + endpoint bot `/api/messages` |
+| `npm run build` | Build production (`next build`) |
+| `npm start` | Chạy bản build (`next start`, cổng 3000) |
+| `npm run serve` | Backend + bot không có giao diện (`@hono/node-server`, cổng `PORT`, mặc định 3978) |
+| `npm test` | Test backend và web (vitest; không cần mạng hay API key) |
+| `npm run typecheck` | `tsc --noEmit` cho backend và web |
+| `npm run teams:package` | Tạo `apps/teams-app/build/meobeo-teams.zip` từ manifest + `.env` |
 
-## Tiến trình suy nghĩ
+## Biến môi trường
 
-MeoBeo hiện quá trình làm việc theo dòng thời gian:
+Xem chú thích đầy đủ trong [`.env.example`](.env.example). Giá trị trống hoặc sai định dạng sẽ dùng
+mặc định.
 
-```
-👩‍🏫 > Soạn 1 câu vận dụng bài 17 có tham số m
-
-💭 Suy nghĩ
-│ **Xác định yêu cầu** Giáo viên cần một câu vận dụng về dấu tam thức có tham số m.
-│ **Kế hoạch** Chọn f(x) = x² + 2x + m ... Cần kiểm tra Δ bằng tool trước khi ra đáp án.
-└ 2.0 giây
-🐱 Mình kiểm tra tam thức với m = 2 để chắc đáp án.          ← "commentary": lời dẫn công khai
-⚙ analyze_quadratic({"a":1,"b":2,"c":2})
-✓ {"delta":"-4","roots":"vô nghiệm (Δ < 0)", ...}
-── Bước 2 ──                                                ← agent loop lặp lại
-💭 Suy nghĩ
-│ **Đối chiếu kết quả** Với m = 2 thì Δ = -4 < 0 ...
-└ 1.1 giây
-🐱 Câu hỏi: Tìm m để x² + 2x + m > 0 với mọi x ∈ ℝ. ...
-
-[openai · 5.0 giây · vào 2100 / ra 270, suy nghĩ 160 tokens]
-```
-
-Có hai loại "tiến trình" khác nhau:
-
-| | Suy nghĩ (reasoning) | Lời dẫn (commentary) |
+| Biến | Mặc định | Ý nghĩa |
 |---|---|---|
-| Là gì | Model suy luận **trước** khi trả lời; provider trả **bản tóm tắt** | Câu ngắn model viết công khai trước khi gọi tool |
-| Cần gì | Model reasoning + API hỗ trợ | Chỉ cần quy tắc 8 trong `prompt.ts`, model nào cũng làm được |
-| Hiện bằng | `💭 Suy nghĩ` (chữ mờ, nghiêng) | `🐱 ...` trước dòng `⚙` |
+| `LLM_PROVIDER` | `openai` | `openai` \| `gemini` \| `mock` |
+| `OPENAI_API_KEY`, `OPENAI_MODEL` | — | Bắt buộc khi dùng OpenAI |
+| `OPENAI_REASONING_EFFORT` | — | Mức suy luận (model reasoning) |
+| `OPENAI_BASE_URL` | API OpenAI | Endpoint tương thích Responses API |
+| `GEMINI_API_KEY`, `GEMINI_MODEL` | — | Bắt buộc khi dùng Gemini |
+| `GEMINI_BASE_URL` | API Google | Endpoint Gemini khác (tuỳ chọn) |
+| `WORKER_MODEL` | = model chính | Model cho worker map (cùng provider) |
+| `CLIENT_ID` | — | App Entra = bot id |
+| `CLIENT_SECRET` | — | Secret của app (bot) |
+| `TENANT_ID` | — | Tenant của app |
+| `NEXT_PUBLIC_AZURE_CLIENT_ID` | `CLIENT_ID` | Client id cho MSAL trên web |
+| `NEXT_PUBLIC_AZURE_TENANT_ID` | `TENANT_ID`, rồi `organizations` | Tenant đăng nhập web |
+| `WEB_URL` | — | Địa chỉ https công khai (link trong bot, manifest) |
+| `DEFAULT_TIMEZONE` | `Asia/Ho_Chi_Minh` | Múi giờ khi không biết múi giờ người dùng |
+| `MAX_LOOKBACK_DAYS` | `30` | Đọc lùi tối đa (1–30; trần cứng 30) |
+| `DEFAULT_LOOKBACK_HOURS` | `24` | Khoảng mặc định khi không nói rõ |
+| `MAX_MESSAGES` | `3000` | Số tin tối đa mỗi lần đọc (50–20000) |
+| `CHUNK_TOKENS` | `12000` | Token ước tính mỗi phần giao cho một worker |
+| `MAP_CONCURRENCY` | `4` | Worker song song mỗi chuyên gia (1–16) |
+| `TRANSCRIPT_CACHE_TTL_MS` | `600000` | Giữ bản đã đọc trong RAM (0 = chỉ trong lượt) |
+| `SESSION_TTL_MS` | `1800000` | Xoá phiên hỏi đáp sau bấy lâu không dùng |
+| `MAX_SESSIONS` | `200` | Số phiên giữ cùng lúc |
+| `DEMO_MODE` | tắt | `1` = nhóm chat giả lập, bỏ qua đăng nhập |
+| `PORT` | `3978` | Cổng của `npm run serve` |
+| `DANGEROUSLY_ALLOW_UNAUTHENTICATED_REQUESTS` | tắt | Chỉ cho Agents Playground trên máy mình |
+| `TEAMS_APP_ID` | tự tạo | GUID app Teams cho `teams:package` |
+| `TEAMS_APP_VERSION` | version gốc | Phiên bản manifest; tăng khi tải lại |
 
-Mỗi provider trả suy nghĩ theo một cách khác nhau:
+## Giới hạn và hành vi
 
-| Provider | Cách bật | Model trả về | Gửi lại ở lượt sau? |
-|---|---|---|---|
-| OpenAI **Responses API** (mặc định) | `reasoning: { effort, summary: 'auto' }` | Tóm tắt qua `response.reasoning_summary_text.delta` + suy nghĩ đầy đủ **đã mã hoá** | Có: gửi lại item mã hoá để model giữ mạch suy nghĩ giữa các lần gọi tool |
-| OpenAI Chat Completions | `reasoning_effort` | **Không** trả suy nghĩ (chỉ đếm token) | Không |
-| Gateway Chat Completions (DeepSeek, OpenRouter, Ollama…) | tuỳ gateway | `delta.reasoning_content` / `delta.reasoning` | Không |
-| Gemini | `thinkingConfig.includeThoughts` | Part có `thought: true` | Không gửi bản tóm tắt; mạch suy nghĩ đi theo `thoughtSignature` |
+- **30 ngày.** Không đọc quá 30 ngày gần nhất. Yêu cầu xa hơn sẽ bị kẹp, và câu trả lời nói rõ đã kẹp.
+- **`MAX_MESSAGES`** (mặc định 3000). Vượt quá thì giữ các tin mới nhất, và câu trả lời báo hội thoại
+  đã bị cắt.
+- **Tốc độ đọc.**
+  - Graph giới hạn khoảng 1 request/giây cho mỗi chat/kênh. Mỗi trang 50 tin, và MeoBeo tự giãn nhịp
+    và chờ theo `Retry-After` khi bị 429.
+  - Một tháng sôi nổi (vài nghìn tin) có thể mất khoảng một phút chỉ để đọc. Tiến trình hiện trong
+    lúc chờ.
+- **Kênh.**
+  - Graph không lọc tin kênh theo thời gian. MeoBeo đọc các thread theo hoạt động mới nhất cho tới
+    khi ra ngoài khoảng cần đọc, rồi lọc bài gốc và trả lời theo thời gian tạo.
+  - Bot dùng được trong kênh *standard*. Manifest chưa khai báo kênh private/shared.
+- **Teams không stream trong group chat/kênh.** Bot gửi một tin tạm rồi sửa tin đó: cập nhật tiến
+  trình (tối đa khoảng mỗi 3 giây), sau đó thay bằng kết quả. Câu trả lời quá dài sẽ bị cắt cho vừa
+  giới hạn kích thước tin nhắn.
+- **Giới hạn 15 giây của Bot Service.** Handler trả lời Bot Service ngay, phần đọc và tóm tắt chạy
+  nền rồi gửi kết quả sau.
+- **Chat 1:1 với bot không đọc được bằng RSC.** RSC `ChatMessage.Read.Chat` chỉ áp dụng cho group
+  chat và chat cuộc họp. Trong chat riêng, bot chỉ hướng dẫn và gửi link web (`WEB_URL`).
+- **Mỗi cuộc trò chuyện một yêu cầu một lúc.** Web trả `409`; Teams trả lời "đang xử lý".
+- Tin đã xoá, tin hệ thống và tin của chính bot bị bỏ qua. Tệp, ảnh và thẻ được thay bằng nhãn như
+  `[tệp: tên]`; MeoBeo không đọc nội dung tệp.
 
-Lưu ý:
-- Model không phải loại reasoning (vd. dòng GPT-4.x) sẽ báo lỗi khi nhận tham số reasoning. Khi đó dùng `/think off`.
-- OpenAI có thể yêu cầu tổ chức phải **xác minh (verify)** mới xem được bản tóm tắt suy nghĩ. Nếu gặp lỗi này, dùng
-  `/think hidden` (model vẫn suy nghĩ nhưng không hiện nội dung) hoặc xác minh tổ chức trên trang OpenAI Platform.
-- Những gì hiện ra là **bản tóm tắt** do provider tạo, không phải toàn bộ suy luận bên trong model.
+## Xử lý sự cố
 
-## Thư viện tài liệu (RAG)
+| Triệu chứng | Nguyên nhân / cách xử lý |
+|---|---|
+| Bot báo **403** khi đọc tin | App chưa được cài vào *chính* group chat/team đó, hoặc chưa đồng ý RSC, hoặc tenant tắt RSC. Cài (lại) app vào cuộc trò chuyện; nhờ quản trị viên bật resource-specific consent. |
+| `AADSTS65001` / `AADSTS90094`, "cần quản trị viên phê duyệt" | Quyền delegated (nhất là `ChannelMessage.Read.All`) chưa có admin consent → *Grant admin consent* trong Entra. |
+| Web: một team báo lỗi trong danh sách / **403** khi đọc kênh | Bạn không còn quyền với team/kênh đó, hoặc consent thiếu quyền kênh → kiểm tra *API permissions* của app. |
+| Web: **401** / "Cần đăng nhập lại Microsoft" | Token hết hạn hoặc bị thu hồi → bấm **Đăng nhập lại**. Trình duyệt chặn popup thì cho phép popup cho trang. |
+| `AADSTS50011` (redirect URI) | Thêm đúng origin (ví dụ `http://localhost:3000`) vào redirect URI nền tảng **SPA**. |
+| `AADSTS9002326` | Redirect URI đang ở nền tảng *Web*; chuyển sang **Single-page application**. |
+| **503** / chip mô hình màu cảnh báo | Provider chưa cấu hình: thiếu `*_API_KEY` hoặc `*_MODEL` cho `LLM_PROVIDER`. Xem `GET /api/health`. |
+| **409** | Cuộc trò chuyện đang xử lý yêu cầu khác; chờ xong hoặc bấm **Dừng**. |
+| `WebApplicationInfoIdOfSideloadedAppMustBeInTheSameTenantAsUser` | App Entra (`CLIENT_ID`) thuộc tenant khác với tài khoản đang tải app lên. Đăng ký app (hoặc chạy `teams login` / `teams app create`) trong cùng tenant với Teams bạn thử. |
+| Bot im lặng | Trong group/kênh phải @MeoBeo. Kiểm tra tunnel đang chạy, messaging endpoint `…/api/messages`, `CLIENT_ID`/`CLIENT_SECRET`, và log server. |
+| Không tải được custom app | Quản trị viên cần bật *Upload custom apps* trong setup policy của Teams. |
+| `teams:package` báo thiếu biến | Đặt `CLIENT_ID` và `WEB_URL` (hoặc `BOT_DOMAIN`) trong `.env`. |
 
-MeoBeo có thể tra cứu tài liệu riêng của bạn (SGK, sách giáo viên, đề mẫu, bài soạn cũ) trước khi soạn.
+## Triển khai production
 
-```bash
-# 1. Chép tài liệu dạng .md hoặc .txt vào library/ (có thể chia thư mục con)
-# 2. Tạo index (chạy lại mỗi khi thêm/sửa tài liệu; chỉ phần mới bị tính phí embedding)
-npm run ingest -- openai     # hoặc: npm run ingest -- gemini
-# 3. Thử tìm kiếm mà không cần gọi model chat
-npm start
-👩‍🏫 > /search tìm m để tam thức luôn dương @17
-```
+- **Cần một tiến trình Node chạy lâu dài**, ví dụ Azure App Service, Azure Container Apps, container
+  hoặc VM: `npm run build && npm start`.
+  - Không dùng serverless/edge: bot trả lời Bot Service ngay rồi *tiếp tục làm việc sau khi đã
+    phản hồi*, và stream SSE có thể kéo dài vài phút. Serverless sẽ đóng băng hoặc giết phần việc
+    đó.
+- **Mở rộng nhiều instance** (scale-out) cần cẩn thận vì phiên, cache và khoá "một lượt một lúc" đều
+  nằm trong RAM của từng tiến trình:
+  - chạy 1 instance;
+  - hoặc bật sticky session (ARR affinity) cho web, và chấp nhận rằng câu hỏi tiếp theo có thể phải
+    đọc lại từ Graph.
+  - Đưa trạng thái ra Redis/DB sẽ phá cam kết "chỉ trong RAM", nên dự án không làm.
+- Khi lên production:
+  - đặt `WEB_URL` là domain thật;
+  - thêm domain vào redirect URI SPA;
+  - đổi messaging endpoint của bot;
+  - tăng `TEAMS_APP_VERSION`, chạy lại `npm run teams:package` và tải gói mới lên.
+- Không bao giờ bật `DEMO_MODE` hay `DANGEROUSLY_ALLOW_UNAUTHENTICATED_REQUESTS` trên server công khai.
+- **Hướng gia cố tiếp theo: OBO.** Hiện backend chuyển tiếp token Graph của người dùng và xác định
+  người dùng qua `/me`. Có thể chuyển sang luồng On-Behalf-Of: SPA xin token cho API của app, rồi
+  backend kiểm tra token và đổi sang token Graph.
+- Đọc lại chính sách lưu dữ liệu của provider mô hình AI (xem [Quyền riêng tư](#quyền-riêng-tư)).
 
-Thư mục `library/vi-du/` có 2 file mẫu (Bài 13, Bài 17) để thử ngay. Các file khác trong `library/`
-**không** được đưa lên git (xem `.gitignore`).
+## Ghi công
 
-Mẹo để RAG tìm tốt:
-- Dùng tiêu đề Markdown (`#`, `##`) cho từng bài, từng mục. MeoBeo cắt tài liệu theo tiêu đề.
-- Ghi số bài trong tiêu đề (`# Bài 17. ...`) hoặc tên file (`bai-17-...md`) để lọc được theo bài.
-- Viết công thức bằng LaTeX (`$x^2 - 5x + 6$`). Công thức chép từ PDF thường bị vỡ (`x2 5x 6`).
-- Mỗi provider có index riêng, vì vector của OpenAI và Gemini không so sánh được với nhau.
+- Agent runtime, provider OpenAI/Gemini, tool loop và các mẫu kiến trúc từ
+  [alvin0/ai-agent-sdk](https://github.com/alvin0/ai-agent-sdk) (`@alvin0/ai-agent-sdk-core`,
+  `-provider-openai`, `-provider-gemini` 0.1.9). Có tham khảo các sample `edge-runtime-chat-agents`
+  (Hono + Next.js, phiên trong RAM, SSE) và `chat-agents` (tách backend/web, provider mock).
+- [Microsoft Teams SDK v2](https://github.com/microsoft/teams.ts) (`@microsoft/teams.apps`),
+  [MSAL.js](https://github.com/AzureAD/microsoft-authentication-library-for-js), [Hono](https://hono.dev),
+  [Next.js](https://nextjs.org).
 
-### RAG hoạt động thế nào
-
-```
- NẠP (npm run ingest, làm 1 lần)                 TRA CỨU (mỗi khi agent gọi search_library)
- ─────────────────────────────                   ────────────────────────────────────────────
- library/*.md                                    câu hỏi của agent
-   │ rag/chunk.ts   cắt theo tiêu đề                │ embedding (purpose = 'query')
-   ▼                                                ▼
- các chunk ≤ 1200 ký tự + tiêu đề + số bài      vector câu hỏi ──┐
-   │ embedding (purpose = 'document')                            ├─ rag/search.ts
-   ▼                                              từ khoá ───────┘   cosine + BM25 → trộn RRF
- .meobeo/index-<provider>.json  ─────────────────────────────────▶  top-k chunk
-                                                                    │ tools/library.ts
-                                                                    ▼
-                                                  kết quả tool → model đọc → soạn bài, ghi nguồn
-```
-
-| Bước | File | Ý chính |
-|---|---|---|
-| Chunking | `rag/chunk.ts` | Cắt theo tiêu đề rồi gom đoạn văn; mỗi chunk giữ "đường dẫn tiêu đề" để không mất ngữ cảnh |
-| Embedding | `providers/*` (`openAiEmbedding`, `geminiEmbedding`) | Văn bản → vector; hai đoạn cùng nghĩa có vector gần nhau |
-| Index | `rag/store.ts` | File JSON + băm nội dung để chỉ embedding lại phần thay đổi |
-| Retrieval | `rag/search.ts` | Hybrid: theo nghĩa (cosine) + theo từ khoá (BM25), trộn bằng Reciprocal Rank Fusion |
-| Generation | `tools/library.ts` | *Agentic RAG*: tìm kiếm là một tool, model tự quyết khi nào tra và tra gì |
-
-## Cấu trúc
-
-```
-src/
-  core/                 ← không biết gì về OpenAI hay Gemini
-    types.ts            Message, ToolCall, StreamEvent, ModelAdapter: "ngôn ngữ trung lập"
-    sse.ts              đọc Server-Sent Events từ fetch
-    tool.ts             defineTool + kiểm tra tham số
-    agent.ts            ★ agent loop: model → tool → model → … → câu trả lời
-  providers/            ← chỉ lớp này biết wire format
-    openai-responses.ts Responses API: tóm tắt suy nghĩ + gửi lại suy nghĩ mã hoá (mặc định)
-    openai.ts           Chat Completions (nối các mẩu JSON tham số tool bị chia nhỏ) + embeddings
-    gemini.ts           streamGenerateContent (functionCall/functionResponse, thoughtSignature)
-    index.ts            chọn provider từ .env
-  tools/
-    curriculum.ts       tra mục lục SGK Toán 10 (Kết nối tri thức)
-    math.ts             calculate (mathjs), analyze_quadratic, describe_statistics
-    files.ts            save_lesson: ghi Markdown vào output/, có hỏi xác nhận
-    library.ts          search_library: tool tra thư viện RAG
-  rag/
-    chunk.ts            cắt tài liệu thành chunk
-    store.ts            đọc library/, tạo và lưu index embedding
-    search.ts           tìm kiếm hybrid (vector + BM25 + RRF)
-  ingest.ts             lệnh npm run ingest
-  data/curriculum.ts    mục lục SGK (sửa file này nếu trường bạn dùng bộ sách khác)
-  prompt.ts             system prompt: vai trò và quy tắc soạn bài
-  render.ts             vẽ dòng thời gian: 💭 suy nghĩ → ⚙ tool → 🐱 trả lời
-  cli.ts                giao diện dòng lệnh
-test/                   test bằng fetch giả, không cần API key
-```
-
-## Học được gì từ từng file
-
-| Khái niệm | Ở đâu | Ghi chú |
-|---|---|---|
-| Message, role, system prompt | `core/types.ts`, `prompt.ts` | Hai provider có format khác nhau nhưng agent chỉ thấy một |
-| Streaming | `core/sse.ts`, `translate()` trong từng provider | In chữ ngay khi model sinh ra |
-| Suy nghĩ (reasoning) | `ReasoningPart` trong `core/types.ts`, `render.ts` | Suy nghĩ là một phần của message; có provider cần nhận lại nó |
-| Tool calling | `core/tool.ts`, `tools/*` | Model chỉ *xin* gọi tool; code của bạn mới là thứ thực thi |
-| **Agent loop** | `core/agent.ts` | Một vòng `for` quanh model; lỗi tool được gửi lại để model tự sửa |
-| Giới hạn an toàn | `maxSteps`, bước cuối `toolChoice: 'none'` | Chống lặp vô hạn nhưng vẫn luôn có câu trả lời |
-| Human-in-the-loop | `ctx.confirm` trong `save_lesson` | Hỏi người dùng trước khi làm việc có tác dụng phụ |
-| Memory (ngắn hạn) | `history` trong `cli.ts` | Mỗi lượt gửi lại toàn bộ hội thoại |
-| Provider-neutral | `providers/*` | Đổi `/openai` ↔ `/gemini` giữa chừng mà hội thoại vẫn liền mạch |
-
-## Kiểm tra
-
-```bash
-npm test          # vitest: agent loop, provider (fetch giả), suy nghĩ, các tool toán, RAG
-npm run typecheck
-```
-
-## Hướng phát triển tiếp
-
-- Nạp thêm định dạng .docx / .pdf cho thư viện RAG
-- Nén history khi hội thoại dài (compaction)
-- Skills: nạp hướng dẫn định dạng đề (trắc nghiệm 4 phương án, đúng/sai, trả lời ngắn) khi cần
-- Xuất file .docx
+Giấy phép MIT.

@@ -1,0 +1,159 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.root > :first-child { margin-top: 0; }
+.root > :last-child { margin-bottom: 0; }
+
+.paragraph {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.heading {
+  margin: 8px 0 0;
+  font-weight: 650;
+  line-height: 1.35;
+  color: var(--text);
+}
+
+.heading[data-level='1'] { font-size: 1.18rem; }
+.heading[data-level='2'] { font-size: 1.08rem; }
+.heading[data-level='3'] { font-size: 1rem; }
+.heading[data-level='4'],
+.heading[data-level='5'],
+.heading[data-level='6'] { font-size: 0.95rem; color: var(--text-2); }
+
+.list {
+  margin: 0;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.list .list { margin-top: 4px; }
+
+.list > li::marker { color: var(--text-3); }
+
+.taskList { padding-left: 4px; list-style: none; }
+
+.task {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.task > input[type='checkbox'] {
+  flex: none;
+  margin: 0;
+  transform: translateY(2px);
+  accent-color: var(--accent);
+}
+
+.quote {
+  margin: 0;
+  padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-2);
+}
+
+.rule {
+  width: 100%;
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 4px 0;
+}
+
+.code {
+  position: relative;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  line-height: 1.6;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.codeLang {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.inlineCode {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--surface-2);
+  font-family: var(--mono);
+  font-size: 0.85em;
+}
+
+.link {
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+  text-underline-offset: 2px;
+}
+
+.link:hover { text-decoration-color: currentColor; }
+
+/* Message citations (#12): quiet, so a dense summary stays readable. */
+.cite {
+  display: inline-block;
+  padding: 0 5px;
+  margin: 0 1px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 0.78em;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  vertical-align: 1px;
+}
+
+/* GFM tables --------------------------------------------------------------- */
+
+.tableScroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.9rem;
+}
+
+.table th,
+.table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+  vertical-align: top;
+}
+
+.table th {
+  background: var(--surface-2);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.table tbody tr:last-child td { border-bottom: none; }

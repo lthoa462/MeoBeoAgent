@@ -1,0 +1,143 @@
+/*
+ * Design tokens. Every component styles against these variables; dark mode
+ * swaps the palette under prefers-color-scheme, so there is no stored theme
+ * preference (nothing in localStorage).
+ */
+
+:root {
+  color-scheme: light;
+
+  --bg: #f5f6fa;
+  --surface: #ffffff;
+  --surface-2: #f0f2f7;
+  --surface-hover: #eceff6;
+  --border: #e2e5ee;
+  --border-strong: #cdd2de;
+
+  --text: #1b1f2e;
+  --text-2: #4a5166;
+  --text-3: #7b8297;
+
+  /* Teams-like indigo. */
+  --accent: #5b5fc7;
+  --accent-hover: #4f52b2;
+  --accent-soft: #ebebfb;
+  --accent-text: #4b4fb8;
+  --on-accent: #ffffff;
+
+  --success: #1e8e52;
+  --warn: #9a6400;
+  --warn-soft: #fff6e0;
+  --warn-border: #f1d798;
+  --danger: #c0352b;
+  --danger-soft: #fdeceb;
+  --danger-border: #f3c2bd;
+
+  --radius: 14px;
+  --radius-sm: 9px;
+  --shadow-sm: 0 1px 2px rgb(16 24 40 / 0.05);
+  --shadow: 0 1px 2px rgb(16 24 40 / 0.06), 0 4px 16px rgb(16 24 40 / 0.06);
+
+  --font: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif,
+    'Apple Color Emoji', 'Segoe UI Emoji';
+  --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  --header-height: 56px;
+  --sidebar-width: 300px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    --bg: #12141b;
+    --surface: #1a1d26;
+    --surface-2: #222632;
+    --surface-hover: #272b38;
+    --border: #2c3140;
+    --border-strong: #3b4153;
+
+    --text: #e8eaf1;
+    --text-2: #b4b9c8;
+    --text-3: #868c9e;
+
+    --accent: #7f85f5;
+    --accent-hover: #9398f7;
+    --accent-soft: #2b2d4d;
+    --accent-text: #a9adff;
+    --on-accent: #10121a;
+
+    --success: #4cc38a;
+    --warn: #f0b955;
+    --warn-soft: #2d2617;
+    --warn-border: #5a4823;
+    --danger: #ff8a80;
+    --danger-soft: #331c1c;
+    --danger-border: #5c2d2b;
+
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.3);
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 6px 20px rgb(0 0 0 / 0.25);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+/* Thin, theme-aware scrollbars. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

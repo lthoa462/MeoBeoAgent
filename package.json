@@ -16,7 +16,7 @@
     "build": "npm run build -w @meobeo/web",
     "start": "npm run start -w @meobeo/web",
     "serve": "npm run serve -w @meobeo/backend",
-    "test": "npm test -w @meobeo/backend",
+    "test": "npm test -w @meobeo/backend && npm test -w @meobeo/web",
     "typecheck": "npm run typecheck -w @meobeo/backend && npm run typecheck -w @meobeo/web",
     "teams:package": "node apps/teams-app/scripts/package.mjs"
   },
