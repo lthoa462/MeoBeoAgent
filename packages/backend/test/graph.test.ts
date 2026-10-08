@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createAppTokenProvider } from '../src/graph/app-token.ts'
 import { GraphError, describeGraphError } from '../src/graph/client.ts'
 import { createGraphFetcher, fetchChannelMessages, fetchChatMessages } from '../src/graph/messages.ts'
@@ -105,11 +105,11 @@ describe('fetchChatMessages', () => {
     const { client, fake } = createTestClient(url => url.searchParams.get('$skiptoken') === '2'
       ? json({ value: page2, '@odata.nextLink': `${GRAPH}/chats/c/messages?$skiptoken=3` })
       : json({ value: page1, '@odata.nextLink': `${GRAPH}/chats/c/messages?$skiptoken=2` }))
-    const progress: number[] = []
+    const progress: Array<[number, number | undefined]> = []
 
-    const result = await fetchChatMessages(client, '19:abc@thread.v2', RANGE, { maxMessages: 100, onPage: count => progress.push(count) })
+    const result = await fetchChatMessages(client, '19:abc@thread.v2', RANGE, { maxMessages: 100, onPage: (count, back) => progress.push([count, back]) })
 
-    expect(result.truncated).toBe(false)
+    expect(result).toMatchObject({ truncated: false, scanLimited: false, scannedBackTo: NOW - 3 * DAY })
     expect(result.messages.map(item => item.id)).toEqual([page1[0]?.id, page1[1]?.id, page2[0]?.id])
     expect(fake.requests).toHaveLength(2)
     const first = fake.requests[0]!.url
@@ -117,7 +117,36 @@ describe('fetchChatMessages', () => {
     expect(first.searchParams.get('$top')).toBe('50')
     expect(first.searchParams.get('$orderby')).toBe('createdDateTime desc')
     expect(first.searchParams.get('$filter')).toBe(`createdDateTime lt ${new Date(NOW).toISOString()}`)
-    expect(progress).toEqual([2, 3])
+    expect(progress).toEqual([[2, NOW - 10 * HOUR], [3, NOW - 3 * DAY]])
+  })
+
+  it('jumps straight to an old window and stops at maxScanPages', async () => {
+    // 10–16/08/2026 in Vietnam, two months before NOW; every page is inside the window.
+    const old: TimeRange = { since: Date.parse('2026-08-09T17:00:00Z'), until: Date.parse('2026-08-16T17:00:00Z') }
+    const { client, fake } = createTestClient(url => {
+      const page = Number(url.searchParams.get('$skiptoken') ?? '0')
+      return json({
+        value: [message(old.until - (2 * page + 1) * HOUR), message(old.until - (2 * page + 2) * HOUR)],
+        '@odata.nextLink': `${GRAPH}/chats/c/messages?$skiptoken=${page + 1}`,
+      })
+    })
+    const progress: Array<[number, number | undefined]> = []
+
+    const result = await fetchChatMessages(client, 'c', old, { maxMessages: 100, maxScanPages: 3, onPage: (count, back) => progress.push([count, back]) })
+
+    expect(fake.requests).toHaveLength(3)
+    expect(fake.requests[0]!.url.searchParams.get('$filter')).toBe('createdDateTime lt 2026-08-16T17:00:00.000Z')
+    expect(result).toMatchObject({ truncated: true, scanLimited: true, scannedBackTo: old.until - 6 * HOUR })
+    expect(result.messages).toHaveLength(6)
+    expect(progress).toEqual([[2, old.until - 2 * HOUR], [4, old.until - 4 * HOUR], [6, old.until - 6 * HOUR]])
+  })
+
+  it('reports the whole window as scanned once the listing runs out', async () => {
+    const { client } = createTestClient(() => json({ value: [message(NOW - HOUR)] }))
+    const progress: Array<number | undefined> = []
+    const result = await fetchChatMessages(client, 'c', RANGE, { maxMessages: 10, maxScanPages: 1, onPage: (_, back) => progress.push(back) })
+    expect(result).toMatchObject({ truncated: false, scanLimited: false, scannedBackTo: RANGE.since })
+    expect(progress).toEqual([RANGE.since])
   })
 
   it('keeps the newest maxMessages and flags truncation', async () => {
@@ -179,10 +208,10 @@ describe('fetchChannelMessages', () => {
       })
     })
 
-    const progress: number[] = []
-    const result = await fetchChannelMessages(client, 'T', '19:chan@thread.tacv2', RANGE, { maxMessages: 100, onPage: count => progress.push(count) })
+    const progress: Array<[number, number | undefined]> = []
+    const result = await fetchChannelMessages(client, 'T', '19:chan@thread.tacv2', RANGE, { maxMessages: 100, onPage: (count, back) => progress.push([count, back]) })
 
-    expect(result.truncated).toBe(false)
+    expect(result).toMatchObject({ truncated: false, scanLimited: false, scannedBackTo: NOW - 3 * DAY })
     const ids = result.messages.map(item => item.id)
     expect(new Set(ids)).toEqual(new Set(['A', aReplies[0]!.id, aReplies[1]!.id, bReplies[1]!.id, 'C', cInline[0]!.id, cMore[0]!.id]))
     expect(ids).not.toContain('B')
@@ -198,7 +227,41 @@ describe('fetchChannelMessages', () => {
       '/teams/T/channels/19:chan@thread.tacv2/messages',
       '/teams/T/channels/C1/messages/C/replies',
     ])
-    expect(progress).toEqual([7])
+    expect(progress).toEqual([[7, NOW - 3 * DAY]])
+  })
+
+  it('pages back from now to an old window, skipping newer threads, until maxScanPages', async () => {
+    const old: TimeRange = { since: NOW - 30 * DAY, until: NOW - 29 * DAY }
+    // Each page: two threads started after the window (their extra replies are never read).
+    const { client, fake } = createTestClient(url => {
+      const page = Number(url.searchParams.get('$skiptoken') ?? '0')
+      const roots = [1, 2].map(n => {
+        const at = NOW - (2 * page + n) * DAY
+        return { ...message(at, { id: `r${page}-${n}` }), replies: [], 'replies@odata.nextLink': `${GRAPH}/teams/T/channels/C/messages/r${page}-${n}/replies` }
+      })
+      return json({ value: roots, '@odata.nextLink': `${GRAPH}/teams/T/channels/C/messages?$skiptoken=${page + 1}` })
+    })
+    const progress: Array<[number, number | undefined]> = []
+
+    const result = await fetchChannelMessages(client, 'T', 'C', old, { maxMessages: 100, maxScanPages: 2, onPage: (count, back) => progress.push([count, back]) })
+
+    expect(fake.paths()).toEqual(['/teams/T/channels/C/messages', '/teams/T/channels/C/messages'])
+    expect(result).toMatchObject({ messages: [], truncated: true, scanLimited: true, scannedBackTo: NOW - 4 * DAY })
+    expect(progress).toEqual([[0, NOW - 2 * DAY], [0, NOW - 4 * DAY]])
+  })
+
+  it('reads an old thread that is still active and stops at the window start without hitting the cap', async () => {
+    const old: TimeRange = { since: NOW - 30 * DAY, until: NOW - 29 * DAY }
+    const oldRoot = message(old.since + HOUR, { id: 'old', lastModifiedDateTime: new Date(NOW - 5 * DAY).toISOString() })
+    const { client } = createTestClient(url => url.searchParams.get('$skiptoken') === 'p2'
+      ? json({ value: [{ ...message(NOW - 40 * DAY, { id: 'older' }), replies: [] }], '@odata.nextLink': `${GRAPH}/teams/T/channels/C/messages?$skiptoken=p3` })
+      : json({
+        value: [{ ...message(NOW - DAY, { id: 'new' }), replies: [] }, { ...oldRoot, replies: [reply('old', NOW - 5 * DAY)] }],
+        '@odata.nextLink': `${GRAPH}/teams/T/channels/C/messages?$skiptoken=p2`,
+      }))
+    const result = await fetchChannelMessages(client, 'T', 'C', old, { maxMessages: 100, maxScanPages: 2 })
+    expect(result.messages.map(item => item.id)).toEqual(['old'])
+    expect(result).toMatchObject({ truncated: false, scanLimited: false, scannedBackTo: NOW - 40 * DAY })
   })
 
   it('keeps paging past threads that were only touched (reactions) and stops at maxMessages', async () => {
@@ -213,6 +276,52 @@ describe('fetchChannelMessages', () => {
     expect(result.truncated).toBe(true)
     // Newest first inside the thread: the three latest replies survive, the root does not.
     expect(result.messages.map(item => item.id)).toEqual([busyReplies[3]!.id, busyReplies[2]!.id, busyReplies[1]!.id])
+  })
+
+  it('counts reply pages against maxScanPages and keeps only in-window replies of a busy thread', async () => {
+    // One root page with a thread whose replies never end; each reply page holds one in-window and one old reply.
+    const root = message(NOW - 4 * DAY, { id: 'busy', lastModifiedDateTime: new Date(NOW - HOUR).toISOString() })
+    const { client, fake } = createTestClient(url => {
+      if (url.pathname.endsWith('/replies')) {
+        const page = Number(url.searchParams.get('$skiptoken') ?? '0')
+        return json({
+          value: [reply('busy', NOW - (page + 2) * HOUR, { id: `in-${page}` }), reply('busy', NOW - (page + 5) * DAY, { id: `old-${page}` })],
+          '@odata.nextLink': `${GRAPH}/teams/T/channels/C/messages/busy/replies?$skiptoken=${page + 1}`,
+        })
+      }
+      return json({ value: [{ ...root, replies: [], 'replies@odata.nextLink': `${GRAPH}/teams/T/channels/C/messages/busy/replies` }] })
+    })
+    const result = await fetchChannelMessages(client, 'T', 'C', RANGE, { maxMessages: 100, maxScanPages: 3 })
+    expect(fake.requests).toHaveLength(3)
+    expect(result.messages.map(item => item.id)).toEqual(['in-0', 'in-1'])
+    expect(result).toMatchObject({ truncated: true, scanLimited: true })
+  })
+
+  it('stops at the deadline with what it has, flagged scanLimited', async () => {
+    const pageOf = (page: number) => json({
+      value: [{ ...message(NOW - (page + 1) * HOUR, { id: `m${page}` }), replies: [] }],
+      '@odata.nextLink': `${GRAPH}/teams/T/channels/C/messages?$skiptoken=${page + 1}`,
+    })
+    const deadline = Date.now() + 60_000
+    const now = vi.spyOn(Date, 'now')
+    try {
+      const { client, fake } = createTestClient(url => {
+        // The second page answers after the deadline.
+        if (url.searchParams.get('$skiptoken') === '1') now.mockReturnValue(deadline)
+        return pageOf(Number(url.searchParams.get('$skiptoken') ?? '0'))
+      })
+      const result = await fetchChannelMessages(client, 'T', 'C', RANGE, { maxMessages: 100, deadline })
+      expect(fake.requests).toHaveLength(2)
+      expect(result.messages.map(item => item.id)).toEqual(['m0', 'm1'])
+      expect(result).toMatchObject({ truncated: true, scanLimited: true, scannedBackTo: NOW - 2 * HOUR })
+
+      const late = createTestClient(() => pageOf(0))
+      expect(await fetchChatMessages(late.client, 'c', RANGE, { maxMessages: 100, deadline: deadline - 1 }))
+        .toMatchObject({ messages: [], truncated: true, scanLimited: true })
+      expect(late.fake.requests).toEqual([])
+    } finally {
+      now.mockRestore()
+    }
   })
 
   it('createGraphFetcher routes by source kind and rejects demo sources', async () => {

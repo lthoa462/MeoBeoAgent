@@ -2,7 +2,10 @@
  * The agents. All use runtime.agent({ id, model: { provider, id }, instructions, ... }).
  *
  * - coordinator (lead, "MeoBeo"): talks to the user; tools come per session
- *   from tools.ts; maxTurns ~8.
+ *   from tools.ts. A turn is normally three steps (load, specialists in
+ *   parallel, answer); the budget leaves room for a period split into many
+ *   months (one load + two or three specialist calls per segment, all in one
+ *   step) and for a corrected retry.
  * - specialists (no tools, single-shot via agent.generate):
  *   summarizer, action-tracker, qa — used for the "single" and "reduce" steps.
  * - chunkReader (no tools, uses llm.workerModel): the "map" worker reading one
@@ -59,8 +62,8 @@ export function createAgentTeam(llm: LlmRuntime): AgentTeam {
       // llm.effort is only ever set for OpenAI; Gemini rejects any effort.
       ...(llm.effort === undefined ? {} : { effort: llm.effort }),
       commentary: 'concise',
-      maxTurns: 8,
-      maxToolCalls: 16,
+      maxTurns: 12,
+      maxToolCalls: 40,
     }),
     specialists: {
       summarizer: worker('summarizer', 'Summarizer', SUMMARIZER_INSTRUCTIONS, llm.model, SPECIALIST_MAX_TOKENS),

@@ -34,6 +34,8 @@ export interface SpecialistRunOptions {
   readonly chunkTokens: number
   readonly signal?: AbortSignal | undefined
   readonly onProgress?: ((event: ProgressEvent) => void) | undefined
+  /** The coordinator's tool call running this specialist; tags every progress event. */
+  readonly callId?: string | undefined
 }
 
 const NO_MESSAGES = 'Không có tin nhắn nào trong khoảng thời gian này.'
@@ -47,7 +49,7 @@ const KIND_LABEL: Readonly<Record<SpecialistKind, string>> = {
 export async function runSpecialist(options: SpecialistRunOptions): Promise<string> {
   const { team, kind, transcript, signal } = options
   const report = (stage: 'map' | 'reduce' | 'single', done: number, total: number): void => {
-    options.onProgress?.({ kind: 'specialist', agent: kind, stage, done, total })
+    options.onProgress?.({ kind: 'specialist', agent: kind, stage, done, total, ...(options.callId === undefined ? {} : { callId: options.callId }) })
   }
   const chunks = transcript.chunks
   const only = chunks.length === 1 ? chunks[0] : undefined
@@ -190,8 +192,10 @@ function reducePrompt(options: SpecialistRunOptions, parts: readonly Notes[]): s
 
 function describeTranscript(transcript: Transcript): string {
   const { range, timeZone, messages } = transcript
-  const truncated = transcript.truncated ? ' Đã chạm giới hạn số tin nhắn nên chỉ có các tin mới nhất trong khoảng này.' : ''
-  return `Cuộc trò chuyện từ ${formatInZone(range.since, timeZone)} đến ${formatInZone(range.until, timeZone)} (múi giờ ${timeZone}), ${messages.length} tin nhắn.${truncated}`
+  const truncated = transcript.scanLimited
+    ? ' Việc quét dừng sớm (chạm giới hạn quét) nên có thể thiếu các tin cũ hơn trong khoảng này.'
+    : transcript.truncated ? ' Đã chạm giới hạn số tin nhắn nên chỉ có các tin mới nhất trong khoảng này.' : ''
+  return `Cuộc trò chuyện từ ${formatInZone(range.since, timeZone)} đến ${formatInZone(range.until, timeZone)} (${range.label}, múi giờ ${timeZone}), ${messages.length} tin nhắn.${truncated}`
 }
 
 function renderNotes(transcript: Transcript, parts: readonly Notes[]): string {

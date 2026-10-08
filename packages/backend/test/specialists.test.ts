@@ -11,7 +11,7 @@ import type { ProgressEvent, ResolvedRange, Transcript } from '../src/types.ts'
 const DAY = 86_400_000
 /** 06/10/2026 11:00 in Vietnam. */
 const NOW = Date.parse('2026-10-06T04:00:00Z')
-const RANGE: ResolvedRange = { since: NOW - 14 * DAY, until: NOW, clamped: false, defaulted: false, notes: [] }
+const RANGE: ResolvedRange = { since: NOW - 14 * DAY, until: NOW, label: '14 ngày qua', clamped: false, defaulted: false, notes: [] }
 
 async function demoTranscript(chunkTokens: number): Promise<Transcript> {
   const turn = { source: DEMO_SOURCE, fetcher: createDemoFetcher({ now: () => NOW }), timeZone: 'Asia/Ho_Chi_Minh', now: NOW }
@@ -67,12 +67,26 @@ describe('runSpecialist', () => {
     })
     expect(text).toBe('Tóm tắt (#1)')
     expect(reader.prompts).toHaveLength(0)
-    expect(specialist.prompts[0]).toMatch(/^Nhiệm vụ: Tóm tắt\n\nCuộc trò chuyện từ 22\/09\/2026 11:00 đến 06\/10\/2026 11:00 \(múi giờ Asia\/Ho_Chi_Minh\)/)
+    expect(specialist.prompts[0]).toMatch(/^Nhiệm vụ: Tóm tắt\n\nCuộc trò chuyện từ 22\/09\/2026 11:00 đến 06\/10\/2026 11:00 \(14 ngày qua, múi giờ Asia\/Ho_Chi_Minh\), \d+ tin nhắn\.\n/)
     expect(specialist.prompts[0]).toContain('<transcript>\n[#1 ')
     expect(events).toEqual([
       { kind: 'specialist', agent: 'summarizer', stage: 'single', done: 0, total: 1 },
       { kind: 'specialist', agent: 'summarizer', stage: 'single', done: 1, total: 1 },
     ])
+  })
+
+  it('tells the specialist when the window was not read completely', async () => {
+    const transcript = await demoTranscript(200_000)
+    const prompt = async (overrides: Partial<Transcript>) => {
+      const specialist = new FakeAgent(() => 'x')
+      await runSpecialist({
+        team: fakeTeam(specialist, specialist), kind: 'summarizer', transcript: { ...transcript, ...overrides }, task: 't', concurrency: 1, chunkTokens: 200_000,
+      })
+      return specialist.prompts[0] ?? ''
+    }
+    expect(await prompt({ truncated: true })).toContain('Đã chạm giới hạn số tin nhắn nên chỉ có các tin mới nhất')
+    expect(await prompt({ truncated: true, scanLimited: true })).toContain('Việc quét dừng sớm (chạm giới hạn quét) nên có thể thiếu các tin cũ hơn')
+    expect(await prompt({})).not.toContain('giới hạn')
   })
 
   it('maps chunks with at most `concurrency` calls in flight, then reduces once', async () => {

@@ -1,6 +1,6 @@
 {
   "name": "@meobeo/backend",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Agents, Microsoft Graph, Teams bot và HTTP API (Hono) cho MeoBeo",

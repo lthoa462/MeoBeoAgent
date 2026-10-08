@@ -98,6 +98,10 @@ export async function createMicrosoftAuth(settings: { readonly clientId: string;
       // v5 cannot see a popup being closed (COOP), it only times out; leave
       // room for MFA, and let a second click take over (see signIn).
       popupBridgeTimeout: 180_000,
+      // The server reads with the token a request starts with, and reading a long
+      // period of a busy channel may take up to ~30 minutes: renew any cached
+      // token with less than 40 minutes left (MSAL's default is 5).
+      tokenRenewalOffsetSeconds: 40 * 60,
     },
   })
   await app.initialize()

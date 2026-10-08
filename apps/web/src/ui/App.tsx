@@ -19,6 +19,10 @@ import { useSession, type SessionController } from './useSession'
 import { useSources } from './useSources'
 import css from './App.module.css'
 
+/** Server defaults, for a health response that lacks the limits (older backend). */
+const DEFAULT_MAX_RANGE_DAYS = 31
+const DEFAULT_MAX_PERIOD_DAYS = 92
+
 // Module scope, so React's dev double-mount cannot run the bridge twice (the
 // first run clears the response from the URL).
 let bridge: Promise<boolean> | undefined
@@ -60,7 +64,7 @@ function Main() {
         busy={session.busy}
         error={state.error}
         healthError={session.healthError}
-        maxLookbackDays={session.health?.maxLookbackDays ?? 30}
+        maxRangeDays={session.health?.maxRangeDays ?? DEFAULT_MAX_RANGE_DAYS}
         onSignIn={session.signIn}
       />
     )
@@ -146,7 +150,8 @@ function Workspace({ session }: { session: SessionController }) {
             title={selection.title}
             subtitle={selection.subtitle}
             chat={chat}
-            maxLookbackDays={health?.maxLookbackDays ?? 30}
+            maxRangeDays={health?.maxRangeDays ?? DEFAULT_MAX_RANGE_DAYS}
+            maxPeriodDays={health?.maxPeriodDays ?? DEFAULT_MAX_PERIOD_DAYS}
             providerConfigured={health?.providerConfigured ?? true}
             onReauth={session.reauth}
           />
@@ -220,11 +225,11 @@ function Splash({ text }: { text?: string }) {
   )
 }
 
-function SignInScreen({ busy, error, healthError, maxLookbackDays, onSignIn }: {
+function SignInScreen({ busy, error, healthError, maxRangeDays, onSignIn }: {
   busy: boolean
   error: string | undefined
   healthError: string | undefined
-  maxLookbackDays: number
+  maxRangeDays: number
   onSignIn: () => void
 }) {
   return (
@@ -234,7 +239,7 @@ function SignInScreen({ busy, error, healthError, maxLookbackDays, onSignIn }: {
         <h1 className={css.cardTitle}>MeoBeo</h1>
         <p className={css.cardLead}>Trợ lý tóm tắt nhóm chat và kênh Microsoft Teams.</p>
         <ul className={css.points}>
-          <li>Đọc tin nhắn chỉ khi bạn hỏi, tối đa {maxLookbackDays} ngày gần nhất.</li>
+          <li>Đọc tin nhắn chỉ khi bạn hỏi: ngày, tuần hay tháng nào trong quá khứ cũng được (mỗi lần tối đa {maxRangeDays} ngày).</li>
           <li>Không lưu tin nhắn: mọi thứ chỉ nằm trong bộ nhớ và biến mất khi bạn đóng trang.</li>
           <li>Dùng quyền của chính bạn: chỉ thấy những gì bạn thấy trong Teams.</li>
         </ul>

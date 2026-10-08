@@ -358,6 +358,10 @@
   background: var(--danger);
 }
 
+.dot[data-status='warn'] {
+  background: var(--warn);
+}
+
 .spinner {
   width: 14px;
   height: 14px;
@@ -448,6 +452,35 @@
   font-size: 0.85rem;
 }
 
+.cardTitle {
+  color: var(--text);
+  font-size: 0.95rem;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.segments {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.segment {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  font-size: 0.82rem;
+}
+
+.segmentLabel {
+  font-weight: 600;
+  color: var(--text);
+}
+
 .cardStats {
   display: flex;
   flex-wrap: wrap;
@@ -460,20 +493,10 @@
   min-width: 0;
 }
 
-.statWide {
-  flex: 1 1 200px;
-}
-
 .statValue {
   font-size: 1.2rem;
   font-weight: 650;
   line-height: 1.2;
-  font-variant-numeric: tabular-nums;
-}
-
-.statRange {
-  font-weight: 600;
-  line-height: 1.6;
   font-variant-numeric: tabular-nums;
 }
 
@@ -509,6 +532,95 @@
   background: var(--warn-soft);
   color: var(--warn);
   font-size: 0.8rem;
+}
+
+/* Date picker ---------------------------------------------------------------- */
+
+.picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  font-size: 0.82rem;
+}
+
+.pickerField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-2);
+}
+
+.pickerInput {
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  color-scheme: inherit;
+}
+
+.pickerInput:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.pickerActions {
+  display: flex;
+  gap: 6px;
+}
+
+.pickerAction,
+.pickerClose {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pickerAction {
+  border: none;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.pickerAction:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.pickerAction:disabled {
+  opacity: 0.45;
+}
+
+.pickerClose {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-2);
+}
+
+.pickerClose:hover {
+  background: var(--surface-hover);
+}
+
+.pickerHint {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--text-3);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.pickerWarn {
+  color: var(--warn);
 }
 
 /* Composer ------------------------------------------------------------------ */

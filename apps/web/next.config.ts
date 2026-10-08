@@ -24,6 +24,31 @@ const publicEnv = Object.fromEntries(
   }).filter((entry): entry is [string, string] => entry[1] !== undefined),
 )
 
+const dev = process.env.NODE_ENV === 'development'
+const MICROSOFT_LOGIN = 'https://login.microsoftonline.com'
+
+/**
+ * Defense in depth for a page that renders text derived from untrusted chat
+ * messages: nothing may load from or report to other hosts. Images only from
+ * this app (the answer view renders none), network calls only to this app and
+ * Microsoft sign-in (MSAL), frames only for MSAL's silent renewal. Next.js
+ * inlines its bootstrap scripts, hence 'unsafe-inline'; `next dev` also needs
+ * eval and its HMR websocket.
+ */
+const contentSecurityPolicy = [
+  "default-src 'self'",
+  `script-src 'self' 'unsafe-inline'${dev ? " 'unsafe-eval'" : ''}`,
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  `connect-src 'self' ${MICROSOFT_LOGIN}${dev ? ' ws: wss:' : ''}`,
+  `frame-src 'self' ${MICROSOFT_LOGIN}`,
+  "frame-ancestors 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join('; ')
+
 const config: NextConfig = {
   // The backend ships raw TypeScript (with explicit .ts imports), so Next
   // compiles it in the same pass as the app.
@@ -56,6 +81,7 @@ const config: NextConfig = {
         { key: 'X-Content-Type-Options', value: 'nosniff' },
         // Same-origin framing stays allowed: MSAL renews tokens in a hidden iframe.
         { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
+        { key: 'Content-Security-Policy', value: contentSecurityPolicy },
       ],
     }]
   },

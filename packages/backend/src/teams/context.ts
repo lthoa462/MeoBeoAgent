@@ -20,6 +20,8 @@ import type { ConversationSource } from '../types.ts'
 /** The subset of a Bot Framework activity this module reads. */
 export interface TeamsActivityLike {
   readonly type: string
+  /** Where the SDK sends every reply (with the bot's Bot Connector token). */
+  readonly serviceUrl?: string | undefined
   readonly text?: string | undefined
   readonly from?: { readonly id?: string; readonly name?: string; readonly role?: string } | undefined
   readonly recipient?: { readonly id?: string; readonly name?: string } | undefined
@@ -157,6 +159,50 @@ export async function resolveTeamsSource(
     teamId = found !== undefined && isTeamId(found) ? found : undefined
   }
   return teamId === undefined ? undefined : { kind: 'channel', teamId, channelId: target.channelId, ...label }
+}
+
+/**
+ * Microsoft endpoints the Bot Connector service talks from (public cloud and
+ * GCC), plus loopback for local tools such as Agents Playground. Replies carry
+ * the bot's Bot Connector token, so they may only ever go to one of these.
+ */
+const SERVICE_HOSTS = [/^smba\.trafficmanager\.net$/, /(^|\.)botframework\.com$/, /\.teams\.microsoft\.(com|us)$/]
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
+
+export function isTrustedServiceUrl(serviceUrl: string | undefined): boolean {
+  let url: URL
+  try {
+    url = new URL(serviceUrl ?? '')
+  } catch {
+    return false
+  }
+  if (url.username !== '' || url.password !== '') return false
+  if (LOOPBACK_HOSTS.has(url.hostname)) return url.protocol === 'http:' || url.protocol === 'https:'
+  return url.protocol === 'https:' && SERVICE_HOSTS.some(pattern => pattern.test(url.hostname))
+}
+
+/**
+ * True when an inbound Authorization header carries a token issued by Entra ID
+ * (login.microsoftonline.com / sts.windows.net) instead of the Bot Framework.
+ * The Teams SDK routes such tokens to its "agentic identity" path, which accepts
+ * any token whose audience is this app (e.g. the ID token of every web user of
+ * the same app registration) and does not bind serviceUrl to the token. MeoBeo
+ * is a classic bot, so they are refused before the SDK sees them; Bot Framework
+ * tokens are then fully validated by the SDK (issuer, signature, serviceUrl).
+ * The payload is decoded without verification: it only decides what to refuse.
+ */
+export function isEntraIssuedToken(authorization: string | undefined): boolean {
+  const token = authorization?.replace(/^Bearer\s+/i, '').trim() ?? ''
+  const payload = token.split('.')[1]
+  if (payload === undefined) return false
+  let issuer: unknown
+  try {
+    issuer = (JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { iss?: unknown }).iss
+  } catch {
+    return false
+  }
+  // The same prefixes the SDK uses to pick its Entra path.
+  return typeof issuer === 'string' && /^\s*https:\/\/(login\.microsoftonline\.com|sts\.windows\.net\/)/i.test(issuer)
 }
 
 export function isFromBot(activity: TeamsActivityLike): boolean {

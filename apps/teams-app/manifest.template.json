@@ -9,8 +9,8 @@
   "developer": {
     "name": "MeoBeo",
     "websiteUrl": "{{WEB_URL}}",
-    "privacyUrl": "{{WEB_URL}}/#quyen-rieng-tu",
-    "termsOfUseUrl": "{{WEB_URL}}/#dieu-khoan"
+    "privacyUrl": "{{WEB_URL}}/privacy#quyen-rieng-tu",
+    "termsOfUseUrl": "{{WEB_URL}}/privacy#dieu-khoan"
   },
   "name": {
     "short": "MeoBeo",
@@ -18,7 +18,7 @@
   },
   "description": {
     "short": "Tóm tắt group chat và kênh Teams khi được @nhắc. Đọc khi cần, không lưu.",
-    "full": "MeoBeo tóm tắt hội thoại trong group chat và kênh Microsoft Teams: ý chính, quyết định, việc cần làm (ai phụ trách, hạn chót) và trả lời câu hỏi về những gì đã trao đổi, kèm số thứ tự tin nhắn (#n) để đối chiếu.\n\nCách dùng: nhắc @MeoBeo kèm yêu cầu, ví dụ \"@MeoBeo tóm tắt 24 giờ qua\", \"@MeoBeo việc cần làm tuần này\" hoặc \"@MeoBeo hôm qua đã chốt gì?\".\n\nDữ liệu tin nhắn: khi cài app, thành viên đồng ý cho MeoBeo đọc tin nhắn của chính group chat hoặc team đó (quyền theo tài nguyên – RSC). MeoBeo chỉ đọc lịch sử khi có người @nhắc tới nó, chỉ trong khoảng thời gian được yêu cầu và tối đa 30 ngày gần nhất. Tin nhắn chỉ được giữ tạm trong bộ nhớ của máy chủ (mặc định 10 phút) để trả lời các câu hỏi tiếp theo, không ghi vào ổ đĩa hay cơ sở dữ liệu và không ghi nội dung vào log. Tin nhắn không nhắc tới MeoBeo bị bỏ qua. Để tạo bản tóm tắt, nội dung được gửi tới nhà cung cấp mô hình AI (OpenAI hoặc Google Gemini) do quản trị viên cấu hình; chính sách lưu dữ liệu của nhà cung cấp đó vẫn áp dụng.\n\nTrong chat riêng (1:1), MeoBeo không đọc được lịch sử và chỉ hướng dẫn cách dùng cùng đường dẫn tới giao diện web."
+    "full": "MeoBeo tóm tắt hội thoại trong group chat và kênh Microsoft Teams: ý chính, quyết định, việc cần làm (ai phụ trách, hạn chót) và trả lời câu hỏi về những gì đã trao đổi, kèm số thứ tự tin nhắn (#n) để đối chiếu.\n\nCách dùng: nhắc @MeoBeo kèm yêu cầu, ví dụ \"@MeoBeo tóm tắt 24 giờ qua\", \"@MeoBeo tóm tắt ngày 6/9\", \"@MeoBeo tuần thứ 2 tháng 8 có quyết định gì?\" hoặc \"@MeoBeo hôm qua đã chốt gì?\". Ngày viết theo kiểu ngày/tháng (6/9 là ngày 6 tháng 9); tuần tính từ thứ Hai đến Chủ Nhật.\n\nDữ liệu tin nhắn: khi cài app, thành viên đồng ý cho MeoBeo đọc tin nhắn của chính group chat hoặc team đó (quyền theo tài nguyên – RSC). MeoBeo chỉ đọc lịch sử khi có người @nhắc tới nó, chỉ trong khoảng thời gian được yêu cầu: bất kỳ ngày, tuần hay tháng nào đã qua, mỗi lần đọc tối đa khoảng một tháng; giai đoạn dài hơn (mặc định tới một quý) được đọc và tóm tắt lần lượt từng tháng. Tin nhắn chỉ được giữ tạm trong bộ nhớ của máy chủ (mặc định 10 phút) để trả lời các câu hỏi tiếp theo, không ghi vào ổ đĩa hay cơ sở dữ liệu và không ghi nội dung vào log. Tin nhắn không nhắc tới MeoBeo bị bỏ qua. Để tạo bản tóm tắt, nội dung được gửi tới nhà cung cấp mô hình AI (OpenAI hoặc Google Gemini) do quản trị viên cấu hình; chính sách lưu dữ liệu của nhà cung cấp đó vẫn áp dụng.\n\nTrong chat riêng (1:1), MeoBeo không đọc được lịch sử và chỉ hướng dẫn cách dùng cùng đường dẫn tới giao diện web."
   },
   "icons": {
     "color": "color.png",
@@ -36,7 +36,7 @@
           "scopes": ["groupChat"],
           "commands": [
             { "title": "tóm tắt 24 giờ qua", "description": "Ý chính, quyết định và việc cần làm trong 24 giờ qua" },
-            { "title": "tóm tắt 7 ngày qua", "description": "Tổng hợp một tuần trao đổi (đọc tối đa 30 ngày gần nhất)" },
+            { "title": "tóm tắt 7 ngày qua", "description": "Tổng hợp một tuần trao đổi; cũng hỏi được ngày, tuần hay tháng bất kỳ đã qua" },
             { "title": "việc cần làm tuần này", "description": "Ai nhận việc gì, hạn khi nào, đã xong chưa" },
             { "title": "hôm qua đã chốt gì?", "description": "Đặt câu hỏi bất kỳ về nội dung đã trao đổi" }
           ]
@@ -45,7 +45,7 @@
           "scopes": ["team"],
           "commands": [
             { "title": "tóm tắt 24 giờ qua", "description": "Tóm tắt các thread của kênh này trong 24 giờ qua" },
-            { "title": "tóm tắt 7 ngày qua", "description": "Tổng hợp một tuần của kênh (đọc tối đa 30 ngày gần nhất)" },
+            { "title": "tóm tắt 7 ngày qua", "description": "Tổng hợp một tuần của kênh; cũng hỏi được ngày, tuần hay tháng bất kỳ đã qua" },
             { "title": "việc cần làm tuần này", "description": "Ai nhận việc gì, hạn khi nào, đã xong chưa" },
             { "title": "tuần này đã quyết định gì?", "description": "Đặt câu hỏi bất kỳ về nội dung của kênh" }
           ]

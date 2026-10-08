@@ -1,6 +1,6 @@
 {
   "name": "meobeo-summarizer",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "MeoBeo – chatbot multi-agent tóm tắt group chat / channel Microsoft Teams (web + Teams bot), xây trên @alvin0/ai-agent-sdk",
   "private": true,
   "type": "module",

@@ -9,8 +9,14 @@
 
 export type LlmProvider = 'openai' | 'gemini' | 'mock'
 
-/** Hard ceiling from the product requirement: never fetch more than one month back. */
-export const HARD_MAX_LOOKBACK_DAYS = 30
+/**
+ * Product rule: one read covers at most one month (any month in the past —
+ * there is no lookback limit). Longer periods are split into segments of at
+ * most this many days and summarized per segment, up to HARD_MAX_PERIOD_DAYS.
+ */
+export const HARD_MAX_RANGE_DAYS = 31
+/** Upper bound for a whole (split) period, e.g. a quarter by default, a year at most. */
+export const HARD_MAX_PERIOD_DAYS = 366
 
 export interface AppConfig {
   readonly llm: {
@@ -37,8 +43,14 @@ export interface AppConfig {
     readonly url: string | undefined
   }
   readonly limits: {
-    readonly maxLookbackDays: number
+    /** Longest single window read at once (≤ HARD_MAX_RANGE_DAYS). */
+    readonly maxRangeDays: number
+    /** Longest period accepted overall; longer than maxRangeDays → split into segments. */
+    readonly maxPeriodDays: number
+    /** Default window when the user names none. */
     readonly defaultLookbackHours: number
+    /** Max Graph list pages per window (bounds channel scans back to old dates). */
+    readonly maxScanPages: number
     readonly maxMessages: number
     /** Estimated tokens per transcript chunk handed to one map worker. */
     readonly chunkTokens: number
@@ -63,6 +75,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const clientId = text(env.CLIENT_ID)
   const clientSecret = text(env.CLIENT_SECRET)
   const unauthenticated = flag(env.DANGEROUSLY_ALLOW_UNAUTHENTICATED_REQUESTS)
+  const maxRangeDays = int(env.MAX_RANGE_DAYS, HARD_MAX_RANGE_DAYS, 1, HARD_MAX_RANGE_DAYS)
   return {
     llm: {
       provider,
@@ -80,8 +93,10 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     },
     web: { url: text(env.WEB_URL) },
     limits: {
-      maxLookbackDays: int(env.MAX_LOOKBACK_DAYS, HARD_MAX_LOOKBACK_DAYS, 1, HARD_MAX_LOOKBACK_DAYS),
-      defaultLookbackHours: int(env.DEFAULT_LOOKBACK_HOURS, 24, 1, HARD_MAX_LOOKBACK_DAYS * 24),
+      maxRangeDays,
+      maxPeriodDays: Math.max(maxRangeDays, int(env.MAX_PERIOD_DAYS, 92, 1, HARD_MAX_PERIOD_DAYS)),
+      defaultLookbackHours: int(env.DEFAULT_LOOKBACK_HOURS, 24, 1, maxRangeDays * 24),
+      maxScanPages: int(env.MAX_SCAN_PAGES, 200, 5, 5_000),
       maxMessages: int(env.MAX_MESSAGES, 3000, 50, 20_000),
       chunkTokens: int(env.CHUNK_TOKENS, 12_000, 1_000, 200_000),
       mapConcurrency: int(env.MAP_CONCURRENCY, 4, 1, 16),

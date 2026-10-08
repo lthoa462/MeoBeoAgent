@@ -71,14 +71,16 @@ describe('GET /health', () => {
     expect(response.headers.get('cache-control')).toBe('no-store')
     const body = await response.json() as HealthResponse
     expect(body).toEqual({
-      ok: true, provider: 'mock', model: 'mock-model', providerConfigured: true, teamsBot: false, demoMode: false, maxLookbackDays: 30,
+      ok: true, provider: 'mock', model: 'mock-model', providerConfigured: true, teamsBot: false, demoMode: false,
+      maxRangeDays: 31, maxPeriodDays: 92,
     })
   })
 
   it('says when the provider is not configured', async () => {
-    const { app } = await harness({ LLM_PROVIDER: 'openai', DEMO_MODE: '1', MAX_LOOKBACK_DAYS: '7' })
+    const { app } = await harness({ LLM_PROVIDER: 'openai', DEMO_MODE: '1', MAX_RANGE_DAYS: '7', MAX_PERIOD_DAYS: '366' })
     const body = await (await app.request('/api/health')).json() as HealthResponse
-    expect(body).toMatchObject({ provider: 'openai', providerConfigured: false, demoMode: true, maxLookbackDays: 7 })
+    expect(body).toMatchObject({ provider: 'openai', providerConfigured: false, demoMode: true, maxRangeDays: 7, maxPeriodDays: 366 })
+    expect(body).not.toHaveProperty('maxLookbackDays')
   })
 })
 

@@ -16,9 +16,18 @@ export interface TimeRange {
   readonly until: number
 }
 
-/** Result of validating a model- or user-supplied window against the lookback limit. */
+/**
+ * A validated window (any date in the past; at most MAX_RANGE_DAYS long — longer
+ * periods are split into several ResolvedRange segments by range.ts).
+ */
 export interface ResolvedRange extends TimeRange {
-  /** True when the requested start was moved forward to respect MAX_LOOKBACK_DAYS. */
+  /**
+   * Vietnamese human label of the exact window in the user's zone, e.g.
+   * "Chủ Nhật, 06/09/2026" or "Tuần 2 tháng 8/2026 (Thứ Hai 10/08 – Chủ Nhật 16/08/2026)".
+   * The coordinator repeats it so the user can spot a misread request.
+   */
+  readonly label: string
+  /** True when the requested end lay in the future and was moved to "now". */
   readonly clamped: boolean
   /** True when no start was requested and the default window was used. */
   readonly defaulted: boolean
@@ -78,8 +87,10 @@ export interface Transcript {
   readonly range: ResolvedRange
   readonly timeZone: string
   readonly messages: readonly TranscriptMessage[]
-  /** True when MAX_MESSAGES stopped the fetch before the window was exhausted. */
+  /** True when MAX_MESSAGES or the scan budget stopped the fetch before the window was exhausted. */
   readonly truncated: boolean
+  /** True when the scan budget (MAX_SCAN_PAGES or the time limit) stopped the scan before it reached the window start. */
+  readonly scanLimited: boolean
   /** Messages formatted and split by token budget, ready for map-reduce. */
   readonly chunks: readonly TranscriptChunk[]
 }
@@ -97,6 +108,8 @@ export interface TranscriptChunk {
 /** Statistics the coordinator sees instead of message content. */
 export interface TranscriptStats {
   readonly transcriptId: string
+  /** Same as Transcript.range.label. */
+  readonly label: string
   readonly messageCount: number
   readonly participants: readonly string[]
   readonly since: string
@@ -105,6 +118,7 @@ export interface TranscriptStats {
   readonly lastMessageAt?: string
   readonly chunkCount: number
   readonly truncated: boolean
+  readonly scanLimited: boolean
   readonly clamped: boolean
   readonly notes: readonly string[]
 }
@@ -116,22 +130,58 @@ export interface MessageFetcher {
 
 export interface FetchOptions {
   readonly maxMessages: number
+  /**
+   * Upper bound on Graph requests for one window (MAX_SCAN_PAGES): list pages and
+   * channel reply pages alike. Matters for channels, whose API has no date
+   * filter: reading an old window means paging back from "now" through every
+   * thread active since then.
+   */
+  readonly maxScanPages?: number
+  /**
+   * Epoch ms after which no further page is requested (a time budget next to
+   * maxScanPages, so a slow scan ends with a partial, scanLimited result instead
+   * of the caller's timeout).
+   */
+  readonly deadline?: number
   readonly signal?: AbortSignal
-  /** Called after each page so hosts can show progress. */
-  readonly onPage?: (fetchedSoFar: number) => void
+  /**
+   * Called after each page so hosts can show progress: in-window messages kept
+   * so far, and how far back (epoch ms) the scan has reached.
+   */
+  readonly onPage?: (fetchedSoFar: number, scannedBackTo?: number) => void
 }
 
 export interface FetchResult {
   /** Flat list (channel replies included), any order; normalization sorts. */
   readonly messages: readonly GraphChatMessage[]
+  /** True when maxMessages or maxScanPages stopped the fetch early. */
   readonly truncated: boolean
+  /** True when maxScanPages or the deadline stopped the scan before reaching range.since. */
+  readonly scanLimited?: boolean
+  /** Oldest point in time (epoch ms) the scan reached. */
+  readonly scannedBackTo?: number
 }
 
 /** Progress reported by long steps so the web UI and the Teams placeholder can show it. */
 export type ProgressEvent =
-  | { readonly kind: 'fetch'; readonly fetched: number }
+  | {
+      readonly kind: 'fetch'
+      readonly fetched: number
+      /** Epoch ms the scan has reached (channels page back from now). */
+      readonly scannedBackTo?: number
+      /** Label of the segment being read when a long period is split. */
+      readonly segment?: string
+    }
   | { readonly kind: 'transcript'; readonly stats: TranscriptStats }
-  | { readonly kind: 'specialist'; readonly agent: SpecialistKind; readonly stage: 'map' | 'reduce' | 'single'; readonly done: number; readonly total: number }
+  | {
+      readonly kind: 'specialist'
+      readonly agent: SpecialistKind
+      readonly stage: 'map' | 'reduce' | 'single'
+      readonly done: number
+      readonly total: number
+      /** The coordinator's tool call this run belongs to: one specialist may run for several segments at once. */
+      readonly callId?: string
+    }
 
 export type SpecialistKind = 'summarizer' | 'action-tracker' | 'qa'
 

@@ -12,36 +12,40 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import clsx from 'clsx'
-import type { TranscriptStats } from '@meobeo/backend/wire'
 import { Markdown } from './Markdown'
 import type { ChatController } from './useChat'
 import type { AgentProgress, Step, Turn } from './types'
 import { agentFinished } from './stream'
 import {
-  AGENT_LABELS, TOOL_LABELS, clip, describeToolInput, formatDateTime, formatNumber, formatRange, formatSpan,
+  AGENT_LABELS, TOOL_LABELS, clip, describeFetch, describeToolInput, formatDateTime, formatNumber, formatSpan,
+  pickDates, summarizeTranscripts, todayInputValue, windowLabel, type TranscriptSummary,
 } from './format'
 import css from './ChatView.module.css'
 
 /** Quick actions: the label on the chip and the prompt it sends. */
 export const QUICK_PROMPTS: ReadonlyArray<{ readonly label: string; readonly prompt: string }> = [
-  { label: 'Tóm tắt 24 giờ qua', prompt: 'Tóm tắt 24 giờ qua' },
-  { label: 'Tóm tắt 3 ngày qua', prompt: 'Tóm tắt 3 ngày qua' },
-  { label: 'Tóm tắt 7 ngày qua', prompt: 'Tóm tắt 7 ngày qua' },
-  { label: 'Việc cần làm trong 30 ngày', prompt: 'Liệt kê việc cần làm trong 30 ngày qua (ai phụ trách, hạn chót, trạng thái)' },
+  { label: 'Tóm tắt hôm qua', prompt: 'Tóm tắt hôm qua' },
+  { label: 'Tóm tắt tuần trước', prompt: 'Tóm tắt tuần trước' },
+  { label: 'Tóm tắt tháng trước', prompt: 'Tóm tắt tháng trước' },
+  { label: 'Việc cần làm tuần này', prompt: 'Liệt kê việc cần làm tuần này (ai phụ trách, hạn chót, trạng thái)' },
 ]
 
 export interface ChatViewProps {
   readonly title: string
   readonly subtitle: string
   readonly chat: ChatController
-  readonly maxLookbackDays: number
+  /** Longest single read (days); longer periods are read month by month. */
+  readonly maxRangeDays: number
+  /** Longest period one request may cover (days). */
+  readonly maxPeriodDays: number
   /** False when /api/health says the LLM provider is not configured. */
   readonly providerConfigured: boolean
   readonly onReauth: () => void
 }
 
-export function ChatView({ title, subtitle, chat, maxLookbackDays, providerConfigured, onReauth }: ChatViewProps) {
+export function ChatView({ title, subtitle, chat, maxRangeDays, maxPeriodDays, providerConfigured, onReauth }: ChatViewProps) {
   const [draft, setDraft] = useState('')
+  const [picking, setPicking] = useState(false)
   const scroller = useRef<HTMLDivElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   /** Whether the reader is at the bottom, which is what makes autoscroll safe. */
@@ -80,6 +84,34 @@ export function ChatView({ title, subtitle, chat, maxLookbackDays, providerConfi
     send(draft)
     setDraft('')
   }
+
+  /** The date picker fills the composer instead of sending, so the request can still be edited. */
+  const fill = (text: string): void => {
+    setDraft(text)
+    setPicking(false)
+    const element = composer.current
+    if (element === null) return
+    element.focus()
+    requestAnimationFrame(() => { element.setSelectionRange(text.length, text.length) })
+  }
+
+  const chips = (className: string | undefined) => (
+    <>
+      {QUICK_PROMPTS.map(chip => (
+        <button key={chip.label} type="button" className={className} disabled={chat.running} onClick={() => { send(chip.prompt) }}>
+          {chip.label}
+        </button>
+      ))}
+      <button
+        type="button"
+        className={className}
+        aria-expanded={picking}
+        onClick={() => { setPicking(value => !value) }}
+      >
+        📅 Chọn ngày/khoảng
+      </button>
+    </>
+  )
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
     // Enter sends, Shift+Enter breaks the line; never while an IME is composing
@@ -124,26 +156,15 @@ export function ChatView({ title, subtitle, chat, maxLookbackDays, providerConfi
                 <div className={css.emptyBadge} aria-hidden="true">🐱</div>
                 <h1 className={css.emptyTitle}>Hỏi MeoBeo về “{title}”</h1>
                 <p className={css.emptyHint}>
-                  Tóm tắt, liệt kê việc cần làm hoặc hỏi bất cứ điều gì đã được bàn trong nhóm.
-                  Tin nhắn chỉ được đọc khi bạn hỏi, tối đa {maxLookbackDays} ngày gần nhất, và không được lưu lại.
+                  Tóm tắt, liệt kê việc cần làm hoặc hỏi bất cứ điều gì đã được bàn trong nhóm — ngày, tuần hay
+                  tháng nào trong quá khứ cũng được, ví dụ “tóm tắt ngày 6/9” hay “tuần thứ 2 tháng 8 có quyết định gì?”.
+                  Tin nhắn chỉ được đọc khi bạn hỏi và không được lưu lại.
                 </p>
-                <div className={css.emptyChips}>
-                  {QUICK_PROMPTS.map(chip => (
-                    <button
-                      key={chip.label}
-                      type="button"
-                      className={css.chip}
-                      disabled={chat.running}
-                      onClick={() => { send(chip.prompt) }}
-                    >
-                      {chip.label}
-                    </button>
-                  ))}
-                </div>
+                <div className={css.emptyChips}>{chips(css.chip)}</div>
               </div>
             )
             : turns.map(turn => (
-              <TurnView key={turn.id} turn={turn} maxLookbackDays={maxLookbackDays} onReauth={onReauth} />
+              <TurnView key={turn.id} turn={turn} onReauth={onReauth} />
             ))}
         </div>
       </div>
@@ -154,20 +175,14 @@ export function ChatView({ title, subtitle, chat, maxLookbackDays, providerConfi
             Máy chủ chưa cấu hình mô hình AI (LLM_PROVIDER và API key), nên chưa thể trả lời. Xem README.
           </div>
         )}
-        {turns.length > 0 && (
-          <div className={css.chipRow}>
-            {QUICK_PROMPTS.map(chip => (
-              <button
-                key={chip.label}
-                type="button"
-                className={css.chipSmall}
-                disabled={chat.running}
-                onClick={() => { send(chip.prompt) }}
-              >
-                {chip.label}
-              </button>
-            ))}
-          </div>
+        {turns.length > 0 && <div className={css.chipRow}>{chips(css.chipSmall)}</div>}
+        {picking && (
+          <DatePicker
+            maxRangeDays={maxRangeDays}
+            maxPeriodDays={maxPeriodDays}
+            onPick={fill}
+            onClose={() => { setPicking(false) }}
+          />
         )}
         <div className={css.composer}>
           <textarea
@@ -175,7 +190,7 @@ export function ChatView({ title, subtitle, chat, maxLookbackDays, providerConfi
             className={css.input}
             value={draft}
             rows={1}
-            placeholder="Hỏi về nhóm chat này…"
+            placeholder="Hỏi về nhóm chat này, ví dụ “tuần thứ 2 tháng 8 có quyết định gì?”"
             aria-label="Câu hỏi"
             maxLength={4000}
             onChange={(event) => { setDraft(event.target.value) }}
@@ -203,7 +218,60 @@ export function ChatView({ title, subtitle, chat, maxLookbackDays, providerConfi
   )
 }
 
-function TurnView({ turn, maxLookbackDays, onReauth }: { turn: Turn; maxLookbackDays: number; onReauth: () => void }) {
+/**
+ * Native date inputs: one date asks about that day, two about the span between
+ * them. Fills the composer rather than sending, so the request can be edited
+ * ("Tóm tắt" → "Có quyết định gì…") before it goes out.
+ */
+function DatePicker({ maxRangeDays, maxPeriodDays, onPick, onClose }: {
+  maxRangeDays: number
+  maxPeriodDays: number
+  onPick: (prompt: string) => void
+  onClose: () => void
+}) {
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  const today = todayInputValue()
+  const picked = pickDates(from, to, { today, maxRangeDays, maxPeriodDays })
+  const hint = `Chọn một ngày, hoặc thêm ngày kết thúc để chọn khoảng. Mỗi lần đọc tối đa ${String(maxRangeDays)} ngày`
+    + (maxPeriodDays > maxRangeDays ? `; khoảng dài hơn (tối đa ${String(maxPeriodDays)} ngày) được chia theo tháng.` : '.')
+
+  return (
+    <div className={css.picker} role="group" aria-label="Chọn ngày hoặc khoảng ngày">
+      <label className={css.pickerField}>
+        <span>Từ ngày</span>
+        <input type="date" className={css.pickerInput} value={from} max={today} onChange={(event) => { setFrom(event.target.value) }} />
+      </label>
+      <label className={css.pickerField}>
+        <span>Đến ngày <span className={css.muted}>(không bắt buộc)</span></span>
+        <input
+          type="date"
+          className={css.pickerInput}
+          value={to}
+          min={from === '' ? undefined : from}
+          max={today}
+          onChange={(event) => { setTo(event.target.value) }}
+        />
+      </label>
+      <div className={css.pickerActions}>
+        <button
+          type="button"
+          className={css.pickerAction}
+          disabled={picked.prompt === undefined}
+          onClick={() => { if (picked.prompt !== undefined) onPick(picked.prompt) }}
+        >
+          Điền vào ô chat
+        </button>
+        <button type="button" className={css.pickerClose} onClick={onClose}>Đóng</button>
+      </div>
+      <p className={clsx(css.pickerHint, picked.prompt === undefined && picked.note !== undefined && css.pickerWarn)} aria-live="polite">
+        {picked.prompt === undefined ? picked.note ?? hint : `“${picked.prompt}”${picked.note === undefined ? '' : ` — ${picked.note}`}`}
+      </p>
+    </div>
+  )
+}
+
+function TurnView({ turn, onReauth }: { turn: Turn; onReauth: () => void }) {
   const live = turn.status === 'running'
   const answer = turn.answer.map(block => block.text).join('\n\n').trim()
   const nothing = !live && answer === '' && turn.error === undefined && turn.status === 'done'
@@ -211,7 +279,7 @@ function TurnView({ turn, maxLookbackDays, onReauth }: { turn: Turn; maxLookback
   return (
     <article className={css.turn}>
       <div className={css.user}>{turn.prompt}</div>
-      <Process turn={turn} maxLookbackDays={maxLookbackDays} />
+      <Process turn={turn} />
       {answer !== '' && (
         <div className={clsx(css.answer, live && css.answerLive)} aria-live={live ? 'polite' : undefined}>
           <Markdown text={answer} />
@@ -244,16 +312,32 @@ function Footnote({ turn, nothing }: { turn: Turn; nothing: boolean }) {
 }
 
 /** The turn's work: expanded while live, folded into one row once finished. */
-function Process({ turn, maxLookbackDays }: { turn: Turn; maxLookbackDays: number }) {
+function Process({ turn }: { turn: Turn }) {
   const [open, setOpen] = useState(false)
   const live = turn.status === 'running'
   if (!live && turn.steps.length === 0) return null
 
+  // A split period loads one transcript per month: they share one card, at the first one's place.
+  const transcripts = turn.steps.flatMap(step => step.kind === 'transcript' ? [step] : [])
+  const cardAt = transcripts[0]?.id
+  const card = transcripts.length === 0 ? undefined : summarizeTranscripts(transcripts.map(step => step.stats))
+  // The specialists then run once per month: name the month on each of their rows.
+  const segmentOf = (step: Step): string | undefined => {
+    if (transcripts.length < 2 || step.kind !== 'tool' || step.input === null || typeof step.input !== 'object') return undefined
+    const id: unknown = Reflect.get(step.input, 'transcriptId')
+    const stats = transcripts.find(item => item.stats.transcriptId === id)?.stats
+    return stats === undefined ? undefined : windowLabel(stats)
+  }
   const tools = turn.steps.filter(step => step.kind === 'tool').length
   const count = tools > 0 ? tools : turn.steps.length
   const body = (
     <ol className={css.steps}>
-      {turn.steps.map(step => <StepView key={step.id} step={step} maxLookbackDays={maxLookbackDays} live={live} />)}
+      {turn.steps.map((step) => {
+        if (step.kind !== 'transcript') return <StepView key={step.id} step={step} live={live} segment={segmentOf(step)} />
+        return step.id === cardAt && card !== undefined
+          ? <li key={step.id} className={css.cardItem}><TranscriptCard summary={card} /></li>
+          : null
+      })}
       {live && <Working startedAt={turn.startedAt} />}
     </ol>
   )
@@ -294,14 +378,15 @@ function Working({ startedAt }: { startedAt: number }) {
   )
 }
 
-function StepView({ step, maxLookbackDays, live }: { step: Step; maxLookbackDays: number; live: boolean }) {
+function StepView({ step, live, segment }: { step: Exclude<Step, { kind: 'transcript' }>; live: boolean; segment: string | undefined }) {
   switch (step.kind) {
     case 'commentary':
       return <li className={clsx(css.step, css.commentary)}>{step.text.trim()}</li>
     case 'reasoning':
       return <Reasoning text={step.text} />
     case 'tool': {
-      const detail = describeToolInput(step.name, step.input)
+      const input = describeToolInput(step.name, step.input)
+      const detail = segment === undefined ? input : input === undefined ? segment : `${segment} · ${input}`
       return (
         <li className={css.step} data-status={step.status}>
           <StatusMark status={step.status} />
@@ -316,11 +401,9 @@ function StepView({ step, maxLookbackDays, live }: { step: Step; maxLookbackDays
       return (
         <li className={css.step}>
           <StatusMark status={live ? 'running' : 'completed'} />
-          <span>{`Đã tải ${formatNumber(step.fetched)} tin nhắn${live ? '…' : ''}`}</span>
+          <span>{describeFetch(step, live)}</span>
         </li>
       )
-    case 'transcript':
-      return <li className={css.cardItem}><TranscriptCard stats={step.stats} maxLookbackDays={maxLookbackDays} /></li>
     case 'agent':
       return (
         <li className={css.step}>
@@ -377,41 +460,53 @@ function ProgressBar({ progress }: { progress: AgentProgress }) {
   )
 }
 
-function TranscriptCard({ stats, maxLookbackDays }: { stats: TranscriptStats; maxLookbackDays: number }) {
-  const shown = stats.participants.slice(0, 6)
-  const more = stats.participants.length - shown.length
-  const range = formatRange(stats.since, stats.until) ?? '—'
-  const first = stats.firstMessageAt === undefined ? undefined : formatDateTime(stats.firstMessageAt)
-  const last = stats.lastMessageAt === undefined ? undefined : formatDateTime(stats.lastMessageAt)
-  const notes: string[] = []
-  if (stats.messageCount === 0) notes.push('Không có tin nhắn nào trong khoảng thời gian này.')
-  if (stats.clamped) notes.push(`Khoảng thời gian đã được giới hạn trong ${String(maxLookbackDays)} ngày gần nhất.`)
-  if (stats.truncated) notes.push('Đã chạm giới hạn số tin nhắn: các tin cũ hơn trong khoảng này không được đọc.')
-  notes.push(...stats.notes)
+/**
+ * What was read: the server's label of the window first (so a misread request
+ * shows at a glance), then counts and people. A split period gets one compact
+ * row per month and totals on top.
+ */
+function TranscriptCard({ summary }: { summary: TranscriptSummary }) {
+  const { segments, participants, notes } = summary
+  const shown = participants.slice(0, 6)
+  const more = participants.length - shown.length
+  const one = segments.length === 1 ? segments[0] : undefined
+  const first = one?.firstMessageAt === undefined ? undefined : formatDateTime(one.firstMessageAt)
+  const last = one?.lastMessageAt === undefined ? undefined : formatDateTime(one.lastMessageAt)
 
   return (
     <div className={css.card}>
+      <div className={css.cardTitle}>{one === undefined ? `${String(segments.length)} khoảng thời gian` : windowLabel(one)}</div>
       <div className={css.cardStats}>
         <div className={css.stat}>
-          <span className={css.statValue}>{formatNumber(stats.messageCount)}</span>
+          <span className={css.statValue}>{formatNumber(summary.messageCount)}</span>
           <span className={css.statLabel}>tin nhắn</span>
         </div>
         <div className={css.stat}>
-          <span className={css.statValue}>{formatNumber(stats.participants.length)}</span>
+          <span className={css.statValue}>{formatNumber(participants.length)}</span>
           <span className={css.statLabel}>người tham gia</span>
         </div>
-        <div className={clsx(css.stat, css.statWide)}>
-          <span className={css.statRange}>{range}</span>
-          <span className={css.statLabel}>khoảng thời gian</span>
-        </div>
       </div>
+      {one === undefined && (
+        <ul className={css.segments}>
+          {segments.map(stats => (
+            <li key={stats.transcriptId} className={css.segment}>
+              <span className={css.dot} data-status={stats.truncated ? 'warn' : 'completed'} aria-hidden="true" />
+              <span className={css.segmentLabel}>{windowLabel(stats)}</span>
+              <span className={css.muted}>
+                {`${formatNumber(stats.messageCount)} tin nhắn · ${formatNumber(stats.participants.length)} người`}
+                {stats.truncated ? ' · chưa đọc hết' : ''}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
       {shown.length > 0 && (
         <div className={css.people}>
           {shown.map(name => <span key={name} className={css.person}>{clip(name, 32)}</span>)}
           {more > 0 && <span className={css.muted}>{`và ${String(more)} người khác`}</span>}
         </div>
       )}
-      {first !== undefined && last !== undefined && stats.messageCount > 0 && (
+      {first !== undefined && last !== undefined && (
         <div className={css.cardLine}>{`Tin đầu tiên ${first} · tin cuối ${last}`}</div>
       )}
       {notes.length > 0 && (

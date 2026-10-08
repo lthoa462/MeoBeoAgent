@@ -27,7 +27,15 @@ export type Step =
     /** Progress of the specialist this tool runs (summarize/extract/answer). */
     readonly progress?: AgentProgress
   }
-  | { readonly kind: 'fetch'; readonly id: string; readonly fetched: number }
+  | {
+    readonly kind: 'fetch'
+    readonly id: string
+    readonly fetched: number
+    /** ISO time the scan has reached (channels page back from now). */
+    readonly scannedBackTo?: string
+    /** Label of the month being read when a long period is split. */
+    readonly segment?: string
+  }
   | { readonly kind: 'transcript'; readonly id: string; readonly stats: TranscriptStats }
   /** Specialist progress that matched no tool call (kept so nothing is lost). */
   | ({ readonly kind: 'agent'; readonly id: string } & AgentProgress)

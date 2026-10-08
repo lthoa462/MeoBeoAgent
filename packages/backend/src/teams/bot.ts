@@ -14,6 +14,11 @@
  * Privacy: with RSC the bot receives every message of the conversation. Those
  * that do not @mention it are dropped without logging; the SDK gets a logger
  * that never prints objects (activities) and drops debug output entirely.
+ *
+ * Trust: only Bot Framework tokens are accepted (Entra-issued ones are refused
+ * before the SDK's agentic path, which binds neither tenant nor serviceUrl),
+ * replies only go to Microsoft serviceUrls, and with a GUID TENANT_ID only that
+ * tenant's conversations are read.
  */
 
 import { App, type AppOptions, type HttpMethod, type HttpRouteHandler, type IHttpServerAdapter, type IHttpServerRequest, type IHttpServerResponse, type IPlugin } from '@microsoft/teams.apps'
@@ -23,10 +28,12 @@ import { GraphClient } from '../graph/client.ts'
 import { createGraphFetcher } from '../graph/messages.ts'
 import type { AppServices } from '../services.ts'
 import type { TurnContext } from '../types.ts'
-import { parseTeamsActivity, resolveTeamsSource, type TeamsActivityLike, type TeamsTurnInfo } from './context.ts'
 import {
-  BUSY_TEXT, FAILED_TEXT, INITIAL_PROGRESS, MISSING_APP_CREDENTIALS_TEXT, NO_TEAM_TEXT, NO_TENANT_TEXT, PLACEHOLDER_TEXT,
-  UNSUPPORTED_TEXT, createEditThrottle, errorText, finalText, personalHelpText, progressText, reduceProgress, shortHelpText,
+  isEntraIssuedToken, isTrustedServiceUrl, parseTeamsActivity, resolveTeamsSource, type TeamsActivityLike, type TeamsTurnInfo,
+} from './context.ts'
+import {
+  BUSY_TEXT, FAILED_TEXT, FOREIGN_TENANT_TEXT, INITIAL_PROGRESS, MISSING_APP_CREDENTIALS_TEXT, NO_TEAM_TEXT, NO_TENANT_TEXT,
+  PLACEHOLDER_TEXT, UNSUPPORTED_TEXT, createEditThrottle, errorText, finalText, personalHelpText, progressText, reduceProgress, shortHelpText,
   truncateForTeams, welcomeText, type HelpOptions,
 } from './format.ts'
 
@@ -34,6 +41,7 @@ import {
 export const MESSAGING_ENDPOINT = '/api/messages'
 /** How long close() waits for background replies after aborting their turns. */
 const CLOSE_GRACE_MS = 5_000
+const GUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i
 
 type SdkLogger = NonNullable<AppOptions<IPlugin>['logger']>
 
@@ -109,10 +117,22 @@ export async function createTeamsBot(services: AppServices, options: TeamsBotOpt
     pending.add(job)
   }
 
-  const help = (botName: string): HelpOptions => ({ botName, maxLookbackDays: config.limits.maxLookbackDays, webUrl: config.web.url })
+  const help = (botName: string): HelpOptions => ({
+    botName,
+    maxRangeDays: config.limits.maxRangeDays,
+    maxPeriodDays: config.limits.maxPeriodDays,
+    webUrl: config.web.url,
+  })
+
+  /** Replies go to the activity's serviceUrl with the bot's token: never anywhere but Microsoft (or loopback, for local tools). */
+  const replyable = (activity: { readonly serviceUrl?: string | undefined }): boolean => {
+    if (isTrustedServiceUrl(activity.serviceUrl)) return true
+    console.warn('[meobeo/teams] activity ignored: its serviceUrl is not a Bot Framework endpoint')
+    return false
+  }
 
   const onMessage = (ctx: ReplyContext): void => {
-    if (closed) return
+    if (closed || !replyable(ctx.activity)) return
     const info = parseTeamsActivity(ctx.activity)
     switch (info.kind) {
       case 'ignore':
@@ -136,6 +156,8 @@ export async function createTeamsBot(services: AppServices, options: TeamsBotOpt
     if (appTokens === undefined) return reply(errorText(MISSING_APP_CREDENTIALS_TEXT))
     if (info.tenantId === undefined) return reply(errorText(NO_TENANT_TEXT))
     const tenant = info.tenantId
+    // A single-tenant deployment reads only its own organization's conversations.
+    if (tenantId !== undefined && GUID.test(tenantId) && tenant.toLowerCase() !== tenantId.toLowerCase()) return reply(errorText(FOREIGN_TENANT_TEXT))
     // Channel threads carry ";messageid=", so every thread gets its own session.
     const key = `teams:${info.conversationId}`
     if (conversations.isBusy(key)) return reply(BUSY_TEXT)
@@ -201,7 +223,7 @@ export async function createTeamsBot(services: AppServices, options: TeamsBotOpt
     let state = INITIAL_PROGRESS
     for await (const event of handle) {
       if (event.t === 'done') {
-        await finish(finalText(event.text, state.stats, timeZone))
+        await finish(finalText(event.text, state.transcripts, timeZone))
       } else if (event.t === 'error') {
         await finish(errorText(event.message))
       } else {
@@ -215,8 +237,8 @@ export async function createTeamsBot(services: AppServices, options: TeamsBotOpt
     }
   }
 
-  const onInstall = (ctx: Pick<ReplyContext, 'send'> & { readonly activity: { readonly conversation?: { readonly conversationType?: string }; readonly recipient?: { readonly name?: string } } }): void => {
-    if (closed) return
+  const onInstall = (ctx: Pick<ReplyContext, 'send'> & { readonly activity: Pick<TeamsActivityLike, 'serviceUrl' | 'conversation' | 'recipient'> }): void => {
+    if (closed || !replyable(ctx.activity)) return
     const botName = ctx.activity.recipient?.name?.trim() || 'MeoBeo'
     const text = ctx.activity.conversation?.conversationType === 'personal' ? personalHelpText(help(botName)) : welcomeText(help(botName))
     track('welcome', () => post(ctx, text))
@@ -231,7 +253,12 @@ export async function createTeamsBot(services: AppServices, options: TeamsBotOpt
 
   return {
     app,
-    handle: request => handler(request),
+    handle: async request => {
+      const auth = request.headers['authorization']
+      if (isEntraIssuedToken(Array.isArray(auth) ? auth[0] : auth)) return { status: 401, body: { error: 'Unsupported token issuer' } }
+      // Only the body and headers: a pre-resolved `token` would make the SDK skip validation.
+      return handler({ body: request.body, headers: request.headers })
+    },
     async idle() {
       while (pending.size > 0) await Promise.allSettled([...pending])
     },

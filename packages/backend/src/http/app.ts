@@ -108,7 +108,8 @@ export function createApiApp(options: ApiAppOptions = {}): Hono {
       providerConfigured: s.conversations !== undefined,
       teamsBot: options.teams ?? s.config.teams.enabled,
       demoMode: s.config.demoMode,
-      maxLookbackDays: s.config.limits.maxLookbackDays,
+      maxRangeDays: s.config.limits.maxRangeDays,
+      maxPeriodDays: s.config.limits.maxPeriodDays,
     }
     return c.json(body)
   })
@@ -168,7 +169,7 @@ export function createApiApp(options: ApiAppOptions = {}): Hono {
     }
     let handle: TurnHandle
     try {
-      handle = s.conversations.runTurn(sessionKey(caller.user, conversationId), message, turn, { conversationId })
+      handle = s.conversations.runTurn(sessionKey(caller.user, conversationId), message, turn, { conversationId, owner: caller.user.id })
     } catch (error) {
       if (error instanceof BusyError) return failure(c, 409, 'busy', error.message)
       throw error

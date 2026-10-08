@@ -7,8 +7,9 @@
  * - Each session owns a CoordinatorToolkit whose currentTurn() returns the
  *   TurnContext bound for the running turn (cleared in finally, endTurn()).
  * - Per-turn `additionalInstructions` (turnInstructions) carry the current
- *   date/time in the user's zone, the zone name, the max lookback and the
- *   source label — never credentials.
+ *   date/time in the user's zone, the zone name, calendar anchors (today,
+ *   yesterday, this/last week with their ISO week-of-month, this/last month),
+ *   the window limits and the source label — never credentials.
  * - The TurnHandle is an async iterable of WireEvent that MERGES, in arrival
  *   order: projected SDK events (assistant-delta → text-delta, commentary-delta
  *   → commentary, reasoning-delta, tool-call, tool-result) and ProgressEvents
@@ -18,7 +19,9 @@
  *   passed through withoutRunReport before projection.
  * - abort() and turn.signal both abort the SDK run.
  * - Sessions idle longer than sessionTtlMs are dropped by prune(); at
- *   maxSessions the least recently used idle session is dropped.
+ *   maxSessions the least recently used idle session is dropped. A session
+ *   opened for an `owner` (the web user) counts against that owner's own cap
+ *   first, so one person cannot crowd everyone else out of the pool.
  *
  * "Arrival order" is causal order: progress frames are held for one macrotask
  * so the tool-call that caused them is delivered first (see TurnEvents).
@@ -77,12 +80,19 @@ export interface ConversationManagerDeps {
   readonly cache: TranscriptCache
   readonly config: AppConfig
   readonly now?: () => number
+  /** Sessions one owner may hold at once (default MAX_SESSIONS_PER_OWNER). */
+  readonly maxSessionsPerOwner?: number
 }
 
 export interface RunTurnOptions {
   /** Echoed in run-start; defaults to the key without its "<scope>:" prefix. */
   readonly conversationId?: string
+  /** Who opens the session (the signed-in web user); bounds how many sessions one person holds. */
+  readonly owner?: string
 }
+
+/** Per owner: plenty of parallel conversations, far below the shared pool. */
+export const MAX_SESSIONS_PER_OWNER = 20
 
 const WEEKDAYS = ['Chủ Nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy'] as const
 const SOURCE_KIND: Readonly<Record<TurnContext['source']['kind'], string>> = {
@@ -93,19 +103,22 @@ const SOURCE_KIND: Readonly<Record<TurnContext['source']['kind'], string>> = {
 const ABORTED = { code: 'aborted', message: 'Đã huỷ yêu cầu.' } as const
 const NO_ANSWER = 'Xin lỗi, MeoBeo chưa đưa ra được câu trả lời cho yêu cầu này. Hãy thử hỏi lại.'
 const MAX_LABEL_CHARS = 120
+const DAY_MS = 86_400_000
 
-/** Extra per-turn instructions for the coordinator (time, zone, limits, source label). */
+/** Extra per-turn instructions for the coordinator (time, zone, calendar anchors, limits, source label). */
 export function turnInstructions(turn: TurnContext, limits: AppConfig['limits']): string {
   const { now, timeZone, source } = turn
   const p = zonedParts(now, timeZone)
-  const weekday = WEEKDAYS[new Date(Date.UTC(p.year, p.month - 1, p.day)).getUTCDay()] ?? ''
+  // Calendar math on the user's wall-clock date, encoded as UTC midnights.
+  const today = Date.UTC(p.year, p.month - 1, p.day)
+  const monday = today - ((new Date(today).getUTCDay() + 6) % 7) * DAY_MS
   const iso = toZonedIso(now, timeZone)
-  const earliest = now - limits.maxLookbackDays * 86_400_000
   const lines = [
     '## Per-turn context (from the server)',
-    `- Current time: ${iso} (${weekday}, ${formatInZone(now, timeZone)})`,
+    `- Current time: ${iso} (${weekdayOf(today)}, ${formatInZone(now, timeZone)})`,
     `- User's time zone: ${timeZone} (UTC${iso.slice(-6)})`,
-    `- Readable history: at most the last ${limits.maxLookbackDays} days (from ${formatInZone(earliest, timeZone)}). Default window when the user names none: the last ${limits.defaultLookbackHours} hours.`,
+    `- Today: ${dayText(today)}, in ${weekText(monday)}. Yesterday: ${dayText(today - DAY_MS)}. Last week: ${weekText(monday - 7 * DAY_MS)}. This month: ${monthText(p.year, p.month)}; last month: ${monthText(p.year, p.month - 1)}.`,
+    `- Readable history: any date in the past (no lookback limit). One window covers at most ${limits.maxRangeDays} days; a longer period, up to ${limits.maxPeriodDays} days, is split per calendar month and each month is read separately. Default window when the user names none: the last ${limits.defaultLookbackHours} hours.`,
   ]
   // The label is a chat topic or channel name chosen by participants: quoted, one line, as data.
   const label = source.label?.replace(/\s+/g, ' ').trim().slice(0, MAX_LABEL_CHARS)
@@ -113,7 +126,39 @@ export function turnInstructions(turn: TurnContext, limits: AppConfig['limits'])
   return lines.join('\n')
 }
 
+function weekdayOf(wall: number): string {
+  return WEEKDAYS[new Date(wall).getUTCDay()] ?? ''
+}
+
+/** 'Thứ Ba 06/10/2026 ("2026-10-06")'. */
+function dayText(wall: number): string {
+  return `${weekdayOf(wall)} ${formatInZone(wall, 'UTC', 'date')} (${JSON.stringify(new Date(wall).toISOString().slice(0, 10))})`
+}
+
+/**
+ * 'Tuần 2 tháng 10/2026 theo quy ước ISO (Thứ Hai 05/10 – Chủ Nhật 11/10/2026)':
+ * a Monday–Sunday week belongs to the month holding its Thursday, and week 1
+ * contains the month's first Thursday.
+ */
+function weekText(monday: number): string {
+  const thursday = new Date(monday + 3 * DAY_MS)
+  const sunday = monday + 6 * DAY_MS
+  const week = Math.ceil(thursday.getUTCDate() / 7)
+  const start = formatInZone(monday, 'UTC', 'date')
+  const sameYear = new Date(monday).getUTCFullYear() === new Date(sunday).getUTCFullYear()
+  return `Tuần ${week} tháng ${thursday.getUTCMonth() + 1}/${thursday.getUTCFullYear()} theo quy ước ISO (Thứ Hai ${sameYear ? start.slice(0, 5) : start} – Chủ Nhật ${formatInZone(sunday, 'UTC', 'date')})`
+}
+
+/** 'tháng 9/2026 ("2026-09")'; month may be 0 (December of the previous year). */
+function monthText(year: number, month: number): string {
+  const first = new Date(Date.UTC(year, month - 1, 1))
+  const y = first.getUTCFullYear()
+  const m = first.getUTCMonth() + 1
+  return `tháng ${m}/${y} (${JSON.stringify(`${y}-${String(m).padStart(2, '0')}`)})`
+}
+
 interface SessionEntry {
+  readonly owner: string | undefined
   readonly session: RuntimeAgentSession
   readonly toolkit: CoordinatorToolkit
   /** The bound context while a turn runs; what the toolkit's currentTurn() returns. */
@@ -141,7 +186,7 @@ export class ConversationManager {
     if (this.#closed) throw new Error('ConversationManager is closed')
     if (this.isBusy(key)) throw new BusyError()
     this.prune()
-    const entry = this.#sessions.get(key) ?? this.#open(key)
+    const entry = this.#sessions.get(key) ?? this.#open(key, options?.owner)
     // Refresh LRU position.
     this.#sessions.delete(key)
     this.#sessions.set(key, entry)
@@ -150,7 +195,7 @@ export class ConversationManager {
     const signal = turn.signal === undefined ? controller.signal : AbortSignal.any([controller.signal, turn.signal])
     const events = new TurnEvents()
     const onProgress = (event: ProgressEvent): void => {
-      events.progress(progressFrame(event))
+      events.progress(progressFrame(event, turn.timeZone))
       try {
         turn.onProgress?.(event)
       } catch {
@@ -213,8 +258,17 @@ export class ConversationManager {
     for (const [key, entry] of this.#sessions) this.#drop(key, entry)
   }
 
-  #open(key: string): SessionEntry {
+  #open(key: string, owner: string | undefined): SessionEntry {
     const { limits } = this.deps.config
+    if (owner !== undefined) {
+      // The owner's own least recently used idle session goes first (insertion order is LRU order).
+      const own = [...this.#sessions].filter(([, candidate]) => candidate.owner === owner)
+      if (own.length >= (this.deps.maxSessionsPerOwner ?? MAX_SESSIONS_PER_OWNER)) {
+        const idle = own.find(([, candidate]) => candidate.abort === undefined)
+        if (idle === undefined) throw new BusyError('Bạn đang có quá nhiều cuộc trò chuyện đang xử lý; hãy đợi một yêu cầu xong rồi thử lại.')
+        this.#drop(...idle)
+      }
+    }
     if (this.#sessions.size >= limits.maxSessions) {
       const idle = [...this.#sessions].find(([, candidate]) => candidate.abort === undefined)
       if (idle === undefined) throw new BusyError('MeoBeo đang xử lý quá nhiều cuộc trò chuyện; hãy thử lại sau ít phút.')
@@ -228,8 +282,13 @@ export class ConversationManager {
       cacheScope: key,
     })
     // The SDK's conversation id only labels spans; a random one keeps user ids out of them.
-    const session = this.deps.team.coordinator.createSession({ conversationId: crypto.randomUUID(), tools: toolkit.tools })
-    const entry: SessionEntry = { session, toolkit, turn: undefined, abort: undefined, running: undefined, lastUsed: this.#now() }
+    const session = this.deps.team.coordinator.createSession({
+      conversationId: crypto.randomUUID(),
+      tools: toolkit.tools,
+      // A long period is loaded month by month inside ONE tool call; the SDK's default per-call cap is 10 minutes.
+      runtimeLimits: { maxToolDurationMs: toolkit.maxToolDurationMs },
+    })
+    const entry: SessionEntry = { owner, session, toolkit, turn: undefined, abort: undefined, running: undefined, lastUsed: this.#now() }
     this.#sessions.set(key, entry)
     return entry
   }
@@ -283,10 +342,19 @@ function conversationIdOf(key: string): string {
   return colon < 0 ? key : key.slice(colon + 1)
 }
 
-function progressFrame(event: ProgressEvent): WireEvent {
-  if (event.kind === 'fetch') return { t: 'fetch-progress', fetched: event.fetched }
+function progressFrame(event: ProgressEvent, timeZone: string): WireEvent {
+  if (event.kind === 'fetch') {
+    const { fetched, scannedBackTo, segment } = event
+    return {
+      t: 'fetch-progress',
+      fetched,
+      ...(scannedBackTo === undefined || !Number.isFinite(scannedBackTo) ? {} : { scannedBackTo: toZonedIso(scannedBackTo, timeZone) }),
+      ...(segment === undefined ? {} : { segment }),
+    }
+  }
   if (event.kind === 'transcript') return { t: 'transcript', stats: event.stats }
-  return { t: 'agent-progress', agent: event.agent, stage: event.stage, done: event.done, total: event.total }
+  const { agent, stage, done, total, callId } = event
+  return { t: 'agent-progress', agent, stage, done, total, ...(callId === undefined ? {} : { callId }) }
 }
 
 /** SDK event → wire frame; everything the UI does not draw (usage, spans, tool outputs) is dropped. */

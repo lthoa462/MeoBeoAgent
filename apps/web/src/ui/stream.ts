@@ -92,22 +92,37 @@ export function reduceTurn(turn: Turn, event: WireEvent): Turn {
       return replaceStep(turn, index, step => step.kind === 'tool' ? { ...step, status: event.isError ? 'failed' : 'completed' } : step)
     }
     case 'fetch-progress': {
-      const index = openIndex(turn.steps, 'fetch', 'transcript')
-      if (index === -1) return withStep(turn, { kind: 'fetch', id: localId('f'), fetched: event.fetched })
-      return replaceStep(turn, index, step => step.kind === 'fetch' ? { ...step, fetched: event.fetched } : step)
+      const progress = {
+        fetched: event.fetched,
+        ...(event.scannedBackTo === undefined ? {} : { scannedBackTo: event.scannedBackTo }),
+        ...(event.segment === undefined ? {} : { segment: event.segment }),
+      }
+      // Each segment of a split period keeps its own line until its transcript arrives.
+      const index = openFetch(turn.steps, event.segment)
+      if (index === -1) return withStep(turn, { kind: 'fetch', id: localId('f'), ...progress })
+      return replaceStep(turn, index, step => ({ kind: 'fetch', id: step.id, ...progress }))
     }
     case 'transcript': {
-      // The stats card supersedes the "fetched N so far" line of the same load.
-      const index = openIndex(turn.steps, 'fetch', 'transcript')
+      // The stats card supersedes the "fetched N so far" line of the same load:
+      // the line of its segment, else the open line of a plain (unsplit) read.
+      const own = openFetch(turn.steps, event.stats.label)
+      const index = own === -1 ? openFetch(turn.steps, undefined) : own
       const steps = index === -1 ? turn.steps : turn.steps.filter((_step, at) => at !== index)
+      // The same transcript loaded again (served from memory) is one transcript, not two.
+      const known = steps.findIndex(step => step.kind === 'transcript' && step.stats.transcriptId === event.stats.transcriptId)
+      if (known !== -1) {
+        return { ...turn, steps: steps.map((step, at) => at === known && step.kind === 'transcript' ? { ...step, stats: event.stats } : step) }
+      }
       return { ...turn, steps: [...steps, { kind: 'transcript', id: localId('t'), stats: event.stats }] }
     }
     case 'agent-progress': {
       const next: AgentProgress = { agent: event.agent, stage: event.stage, done: event.done, total: event.total }
-      // Parallel calls of the same tool report under the same agent name; the
-      // earliest one still working is the best guess for whose progress this is.
-      const tool = turn.steps.findIndex(step => step.kind === 'tool' && step.name === SPECIALIST_TOOL[event.agent]
-        && step.status === 'running' && (step.progress === undefined || !agentFinished(step.progress)))
+      // The server names the call; an older one does not, and then the earliest
+      // running call of that tool is the best guess for whose progress this is.
+      const tool = event.callId !== undefined
+        ? turn.steps.findIndex(step => step.kind === 'tool' && step.id === event.callId)
+        : turn.steps.findIndex(step => step.kind === 'tool' && step.name === SPECIALIST_TOOL[event.agent]
+          && step.status === 'running' && (step.progress === undefined || !agentFinished(step.progress)))
       if (tool !== -1) return replaceStep(turn, tool, step => step.kind === 'tool' ? { ...step, progress: next } : step)
       const index = findLastIndex(turn.steps, step => step.kind === 'agent' && step.agent === event.agent && !agentFinished(step))
       if (index === -1) return withStep(turn, { kind: 'agent', id: localId('a'), ...next })
@@ -173,12 +188,16 @@ function replaceStep(turn: Turn, index: number, update: (step: Step) => Step): T
   return { ...turn, steps: turn.steps.map((step, at) => at === index ? update(step) : step) }
 }
 
-/** Index of the last `kind` step not yet followed by a `closer` step, or -1. */
-function openIndex(steps: readonly Step[], kind: Step['kind'], closer: Step['kind']): number {
+/**
+ * Index of the last fetch line of `segment` not yet closed by its transcript,
+ * or -1. Without a segment any later transcript closes it (reads in sequence);
+ * with one, only the transcript of that segment does (reads in parallel).
+ */
+function openFetch(steps: readonly Step[], segment: string | undefined): number {
   for (let index = steps.length - 1; index >= 0; index--) {
     const step = steps[index]
-    if (step?.kind === closer) return -1
-    if (step?.kind === kind) return index
+    if (step?.kind === 'transcript' && (segment === undefined || step.stats.label === segment)) return -1
+    if (step?.kind === 'fetch' && step.segment === segment) return index
   }
   return -1
 }

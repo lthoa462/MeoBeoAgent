@@ -155,10 +155,11 @@ describe('chunk', () => {
 const transcript = (id: string, overrides: Partial<Transcript> = {}): Transcript => ({
   id,
   source: { kind: 'demo' },
-  range: { since: 0, until: 1, clamped: false, defaulted: false, notes: [] },
+  range: { since: 0, until: 1, label: 'x', clamped: false, defaulted: false, notes: [] },
   timeZone: VN,
   messages: [],
   truncated: false,
+  scanLimited: false,
   chunks: [],
   ...overrides,
 })
@@ -245,16 +246,16 @@ describe('TranscriptCache', () => {
 })
 
 describe('buildTranscript / transcriptStats', () => {
-  const range: ResolvedRange = { since: NOW - DAY, until: NOW, clamped: true, defaulted: false, notes: ['đã kẹp'] }
+  const range: ResolvedRange = { since: NOW - DAY, until: NOW, label: '24 giờ qua', clamped: true, defaulted: false, notes: ['đã kẹp'] }
 
-  const fetcherWith = (messages: GraphChatMessage[], truncated = false) => {
+  const fetcherWith = (messages: GraphChatMessage[], truncated = false, extra: { scanLimited?: boolean; scannedBackTo?: number } = {}) => {
     const calls: { range: TimeRange; options: FetchOptions }[] = []
     const fetcher: MessageFetcher = {
       async fetch(_source, fetchRange, options) {
         calls.push({ range: fetchRange, options })
         options.onPage?.(Math.min(2, messages.length))
-        options.onPage?.(messages.length)
-        return { messages, truncated }
+        options.onPage?.(messages.length, NOW - 2 * HOUR)
+        return { messages, truncated, ...extra }
       },
     }
     return { fetcher, calls }
@@ -283,17 +284,20 @@ describe('buildTranscript / transcriptStats', () => {
     const built = await buildTranscript(turn, range, { maxMessages: 500, chunkTokens: 2000 })
 
     expect(built.id).toMatch(/^t_[0-9a-f]{10}$/)
-    expect(built).toMatchObject({ source: turn.source, range, timeZone: VN, truncated: false })
+    expect(built).toMatchObject({ source: turn.source, timeZone: VN, truncated: false, scanLimited: false })
+    expect(built.range).toBe(range)
     expect(built.messages.map(item => item.author)).toEqual(['Hà', 'Bảo', 'Bảo'])
     expect(built.chunks).toHaveLength(1)
     expect(calls[0]?.range).toEqual({ since: range.since, until: range.until })
     expect(calls[0]?.options).toMatchObject({ maxMessages: 500, signal: controller.signal })
-    expect(events).toEqual([{ kind: 'fetch', fetched: 2 }, { kind: 'fetch', fetched: 4 }])
+    expect(calls[0]?.options).not.toHaveProperty('maxScanPages')
+    expect(events).toEqual([{ kind: 'fetch', fetched: 2 }, { kind: 'fetch', fetched: 4, scannedBackTo: NOW - 2 * HOUR }])
     expect((await buildTranscript(turn, range, { maxMessages: 500, chunkTokens: 2000 })).id).not.toBe(built.id)
 
     const stats = transcriptStats(built)
     expect(stats).toEqual({
       transcriptId: built.id,
+      label: '24 giờ qua',
       messageCount: 3,
       participants: ['Bảo', 'Hà'],
       since: '2026-10-05T11:00:00+07:00',
@@ -302,9 +306,50 @@ describe('buildTranscript / transcriptStats', () => {
       lastMessageAt: toVnIso(NOW - HOUR),
       chunkCount: 1,
       truncated: false,
+      scanLimited: false,
       clamped: true,
       notes: ['đã kẹp'],
     })
+  })
+
+  it('passes the scan budget and tags progress with the segment being read', async () => {
+    const { fetcher, calls } = fetcherWith([message(NOW - HOUR)])
+    const events: ProgressEvent[] = []
+    const segment: ResolvedRange = { ...range, label: 'Tháng 8/2026', clamped: false, notes: [] }
+    await buildTranscript(
+      { source: { kind: 'channel', teamId: 't', channelId: 'c' }, fetcher, timeZone: VN, now: NOW, onProgress: event => events.push(event) },
+      segment,
+      { maxMessages: 10, chunkTokens: 1000, maxScanPages: 7, deadline: NOW + HOUR, segmentLabel: segment.label },
+    )
+    expect(calls[0]?.options).toMatchObject({ maxMessages: 10, maxScanPages: 7, deadline: NOW + HOUR })
+    expect(events).toEqual([
+      { kind: 'fetch', fetched: 1, segment: 'Tháng 8/2026' },
+      { kind: 'fetch', fetched: 1, scannedBackTo: NOW - 2 * HOUR, segment: 'Tháng 8/2026' },
+    ])
+  })
+
+  it('explains in Vietnamese how far back a scan-limited channel was read', async () => {
+    const scannedBackTo = Date.parse('2026-09-20T02:30:00Z')
+    const { fetcher } = fetcherWith([], true, { scanLimited: true, scannedBackTo })
+    const channel = { source: { kind: 'channel', teamId: 't', channelId: 'c' }, fetcher, timeZone: VN, now: NOW } as const
+    const built = await buildTranscript(channel, range, { maxMessages: 10, chunkTokens: 1000, maxScanPages: 200 })
+    expect(built).toMatchObject({ truncated: true, scanLimited: true })
+    expect(built.range).toMatchObject({ since: range.since, until: range.until, label: range.label })
+    expect(range.notes).toEqual(['đã kẹp'])
+
+    const stats = transcriptStats(built)
+    expect(stats).toMatchObject({ label: '24 giờ qua', truncated: true, scanLimited: true, messageCount: 0 })
+    expect(stats.notes).toEqual([
+      'đã kẹp',
+      'Kênh có nhiều hoạt động: chỉ quét được tới 20/09/2026 09:30 (đã chạm giới hạn quét 200 trang) nên có thể thiếu tin nhắn trước đó.',
+      'Chưa tìm thấy tin nhắn nào (việc quét dừng trước khi đọc hết khoảng thời gian này).',
+    ])
+    expect(stats.notes.join(' ')).not.toMatch(/giới hạn số tin nhắn/)
+
+    const chat = await buildTranscript({ ...channel, source: { kind: 'chat', chatId: 'c' }, fetcher: fetcherWith([message(NOW - HOUR)], true, { scanLimited: true }).fetcher }, range, { maxMessages: 10, chunkTokens: 1000 })
+    expect(transcriptStats(chat).notes.join(' ')).not.toMatch(/MAX_SCAN_PAGES/)
+    const timed = await buildTranscript({ ...channel, source: { kind: 'chat', chatId: 'c' }, fetcher: fetcherWith([message(NOW - HOUR)], true, { scanLimited: true }).fetcher }, range, { maxMessages: 10, chunkTokens: 1000, maxScanPages: 200, deadline: Date.now() - 1 })
+    expect(transcriptStats(timed).notes).toContain('Cuộc trò chuyện có nhiều tin nhắn: chỉ quét được một phần (đã hết thời gian quét cho một lần đọc) nên có thể thiếu tin nhắn trước đó.')
   })
 
   it('reports empty and truncated windows in the notes', async () => {

