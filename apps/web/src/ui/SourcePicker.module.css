@@ -1,0 +1,271 @@
+.picker {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 14px 6px 16px;
+}
+
+.headTitle {
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.iconButton {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-3);
+}
+
+.iconButton:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.search {
+  position: relative;
+  margin: 4px 12px 8px;
+}
+
+.searchIcon {
+  position: absolute;
+  top: 50%;
+  left: 10px;
+  transform: translateY(-50%);
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+.searchInput {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px 0 30px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  outline: none;
+  font-size: 0.88rem;
+}
+
+.searchInput:focus {
+  border-color: var(--accent);
+  background: var(--surface);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 8px 16px;
+}
+
+.section {
+  margin-top: 10px;
+}
+
+.sectionLabel {
+  margin: 0;
+  padding: 6px 8px 4px;
+  color: var(--text-3);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row,
+.teamRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 0.88rem;
+  text-align: left;
+}
+
+.row:hover,
+.teamRow:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.rowActive,
+.rowActive:hover {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.rowIcon {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  flex: none;
+  color: var(--text-3);
+  font-size: 0.85rem;
+}
+
+.rowActive .rowIcon {
+  color: inherit;
+}
+
+.rowLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.rowMeta {
+  flex: none;
+  color: var(--text-3);
+  font-size: 0.72rem;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.runningDot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% { opacity: 0.3; }
+}
+
+.team + .team {
+  margin-top: 2px;
+}
+
+.teamRow {
+  color: var(--text);
+  font-weight: 550;
+}
+
+.channels {
+  margin-left: 14px;
+  padding-left: 6px;
+  border-left: 1px solid var(--border);
+}
+
+.chevron {
+  flex: none;
+  color: var(--text-3);
+  transition: transform 120ms ease;
+}
+
+.chevronOpen {
+  transform: rotate(90deg);
+}
+
+.teamError {
+  margin: 2px 8px 6px 28px;
+  color: var(--warn);
+  font-size: 0.76rem;
+}
+
+.warnings {
+  margin: 6px 4px 0;
+  padding: 8px 10px 8px 24px;
+  border: 1px solid var(--warn-border);
+  border-radius: 10px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 0.78rem;
+}
+
+.errorBox {
+  margin: 8px 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--danger-border);
+  border-radius: 10px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 0.84rem;
+}
+
+.errorText {
+  margin: 0;
+}
+
+.errorDetail {
+  margin: 4px 0 0;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  opacity: 0.8;
+  overflow-wrap: anywhere;
+}
+
+.retry {
+  margin-top: 8px;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.emptyText {
+  margin: 16px 8px;
+  color: var(--text-3);
+  font-size: 0.84rem;
+}
+
+.skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 14px 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.skeleton span {
+  display: block;
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--surface-2), var(--surface-hover), var(--surface-2));
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}

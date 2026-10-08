@@ -1,0 +1,350 @@
+/* Header ----------------------------------------------------------------- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 1;
+  min-width: 0;
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: none;
+}
+
+.logo {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.brandName {
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.brandTag {
+  color: var(--text-3);
+  font-size: 0.8rem;
+}
+
+.chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.chip {
+  overflow: hidden;
+  max-width: 260px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chip[data-tone='accent'] {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-family: var(--font);
+  font-weight: 600;
+}
+
+.chip[data-tone='warn'] {
+  border-color: var(--warn-border);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  min-width: 0;
+}
+
+.avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.userText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: 200px;
+  line-height: 1.25;
+}
+
+.userName,
+.userMail {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.userName {
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.userMail {
+  color: var(--text-3);
+  font-size: 0.72rem;
+}
+
+.signOut {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 0.82rem;
+}
+
+.signOut:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* Banners --------------------------------------------------------------- */
+
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  flex: none;
+  padding: 8px 16px;
+  font-size: 0.86rem;
+}
+
+.banner[data-tone='warn'] {
+  border-bottom: 1px solid var(--warn-border);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.banner[data-tone='danger'] {
+  border-bottom: 1px solid var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.bannerAction {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+/* No source selected ------------------------------------------------------ */
+
+.placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 32px 24px;
+  text-align: center;
+}
+
+.placeholderBadge {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 16px;
+  border-radius: 20px;
+  background: var(--accent-soft);
+  font-size: 30px;
+}
+
+.placeholderTitle {
+  margin: 0 0 8px;
+  font-size: 1.3rem;
+  font-weight: 650;
+}
+
+.placeholderText {
+  max-width: 460px;
+  margin: 0;
+  color: var(--text-2);
+  line-height: 1.6;
+}
+
+.placeholderAction {
+  display: none;
+  margin-top: 18px;
+  height: 38px;
+  padding: 0 18px;
+  border: none;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+/* Full-page screens (splash, sign-in, setup) ------------------------------- */
+
+.screen {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: 24px 16px;
+  background:
+    radial-gradient(1200px 500px at 50% -10%, var(--accent-soft), transparent 70%),
+    var(--bg);
+}
+
+.splash {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.splashLogo {
+  font-size: 44px;
+  animation: bob 1.6s ease-in-out infinite;
+}
+
+@keyframes bob {
+  50% { transform: translateY(-6px); }
+}
+
+.splashText {
+  margin: 0;
+  color: var(--text-2);
+}
+
+.card {
+  width: 100%;
+  max-width: 460px;
+  padding: 32px 28px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.cardLogo {
+  display: grid;
+  place-items: center;
+  width: 60px;
+  height: 60px;
+  margin-bottom: 16px;
+  border-radius: 18px;
+  background: var(--accent-soft);
+  font-size: 30px;
+}
+
+.cardTitle {
+  margin: 0 0 6px;
+  font-size: 1.45rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.cardLead {
+  margin: 0 0 12px;
+  color: var(--text-2);
+  line-height: 1.6;
+}
+
+.cardLead code,
+.cardNote code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--surface-2);
+  font-family: var(--mono);
+  font-size: 0.82em;
+}
+
+.points {
+  margin: 4px 0 22px;
+  padding-left: 20px;
+  color: var(--text-2);
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.points li + li {
+  margin-top: 4px;
+}
+
+.primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  height: 44px;
+  border: none;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.primary:disabled {
+  opacity: 0.7;
+}
+
+.cardError {
+  margin: 14px 0 0;
+  padding: 8px 12px;
+  border: 1px solid var(--danger-border);
+  border-radius: 10px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 0.86rem;
+}
+
+.cardNote {
+  margin: 12px 0 0;
+  color: var(--text-3);
+  font-size: 0.84rem;
+}
+
+@media (max-width: 860px) {
+  .placeholderAction { display: inline-block; }
+}
+
+@media (max-width: 640px) {
+  .brandTag,
+  .userText,
+  .chip:not([data-tone]) { display: none; }
+  .topbar { gap: 8px; }
+}

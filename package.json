@@ -1,26 +1,24 @@
 {
-  "name": "meobeo-agent",
-  "version": "0.1.0",
-  "description": "MeoBeo – AI agent hỗ trợ giáo viên soạn bài môn Toán lớp 10 (OpenAI & Gemini)",
+  "name": "meobeo-summarizer",
+  "version": "0.3.0",
+  "description": "MeoBeo – chatbot multi-agent tóm tắt group chat / channel Microsoft Teams (web + Teams bot), xây trên @alvin0/ai-agent-sdk",
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12"
   },
+  "workspaces": [
+    "packages/*",
+    "apps/web"
+  ],
   "scripts": {
-    "start": "tsx src/cli.ts",
-    "ingest": "tsx src/ingest.ts",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "dev": "npm run dev -w @meobeo/web",
+    "build": "npm run build -w @meobeo/web",
+    "start": "npm run start -w @meobeo/web",
+    "serve": "npm run serve -w @meobeo/backend",
+    "test": "npm test -w @meobeo/backend && npm test -w @meobeo/web",
+    "typecheck": "npm run typecheck -w @meobeo/backend && npm run typecheck -w @meobeo/web",
+    "teams:package": "node apps/teams-app/scripts/package.mjs"
   },
-  "license": "MIT",
-  "dependencies": {
-    "mathjs": "^15.2.0"
-  },
-  "devDependencies": {
-    "@types/node": "^22.20.4",
-    "tsx": "^4.23.15",
-    "typescript": "^7.0.2",
-    "vitest": "^5.0.2"
-  }
+  "license": "MIT"
 }
