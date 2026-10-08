@@ -26,6 +26,7 @@ Xây dựng trên [`@alvin0/ai-agent-sdk`](https://github.com/alvin0/ai-agent-sd
 - [Biến môi trường](#biến-môi-trường)
 - [Giới hạn và hành vi](#giới-hạn-và-hành-vi)
 - [Xử lý sự cố](#xử-lý-sự-cố)
+- [Deploy lên Railway (server test)](#deploy-lên-railway-server-test)
 - [Triển khai production](#triển-khai-production)
 - [Ghi công](#ghi-công)
 
@@ -642,6 +643,32 @@ mặc định.
 | Bot im lặng | Trong group/kênh phải @MeoBeo. Kiểm tra tunnel đang chạy, messaging endpoint `…/api/messages`, `CLIENT_ID`/`CLIENT_SECRET`, và log server. |
 | Không tải được custom app | Quản trị viên cần bật *Upload custom apps* trong setup policy của Teams. |
 | `teams:package` báo thiếu biến | Đặt `CLIENT_ID` và `WEB_URL` (hoặc `BOT_DOMAIN`) trong `.env`. |
+
+## Deploy lên Railway (server test)
+
+`railway.json` ở gốc repo khai báo build `npm run build`, start `npm start` (Next.js tự nhận biến `PORT`
+mà Railway cấp), healthcheck `/api/health` và **1 replica**, vì session và cache chỉ nằm trong RAM
+của một tiến trình.
+
+1. Railway → New Project → Deploy from GitHub repo → chọn repo này và nhánh cần chạy. Từ đó mỗi lần
+   push là Railway tự build và deploy.
+2. Service → Variables:
+   - Test offline, không cần Azure hay API key: `LLM_PROVIDER=mock`, `DEMO_MODE=1`.
+   - Chạy thật: thêm các biến trong mục [Biến môi trường](#biến-môi-trường):
+
+     | Nhóm | Biến |
+     |---|---|
+     | LLM | `OPENAI_API_KEY` + `OPENAI_MODEL`, hoặc `GEMINI_*` |
+     | Bot Teams | `CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID` |
+     | Đăng nhập web | `NEXT_PUBLIC_AZURE_CLIENT_ID`, `NEXT_PUBLIC_AZURE_TENANT_ID` |
+     | Địa chỉ app | `WEB_URL` = domain Railway |
+
+     Bỏ `DEMO_MODE` khi chạy thật.
+   - Biến `NEXT_PUBLIC_*` được nhúng lúc build: đổi giá trị thì phải redeploy.
+3. Settings → Networking → Generate Domain. Domain HTTPS cố định này thay được devtunnel:
+   - SPA redirect URI trong Entra app: `https://<domain>`;
+   - messaging endpoint của bot: `https://<domain>/api/messages`;
+   - `WEB_URL` khi chạy `npm run teams:package`.
 
 ## Triển khai production
 
